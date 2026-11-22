@@ -6,9 +6,9 @@
   <link rel="stylesheet" href="panel.css">
 </head>
 <body>
-  <main id="studio">
+  <main id="studio" tabindex="0" aria-labelledby="panel-title">
     <header class="masthead">
-      <h1>SHAPE<span>PS</span></h1>
+      <h1 id="panel-title">SHAPE<span>PS</span></h1>
       <button id="update" class="quiet" type="button">Check updates</button>
     </header>
     <div id="update-message" class="update-message" role="status" hidden>
@@ -116,7 +116,7 @@
           <label for="swatch-search" class="sr-label">Search swatches</label>
           <input id="swatch-search" type="text" placeholder="Search swatches" spellcheck="false">
         </div>
-        <div id="swatch-list" class="swatch-list" aria-label="Available swatches" role="group"></div>
+        <div id="swatch-list" aria-label="Available swatches" role="group"></div>
         <button id="use-foreground" type="button" class="quiet" title="Use the color selected in Photoshop's Swatches panel">Use foreground</button>
       </div>
       <div class="picker-actions">

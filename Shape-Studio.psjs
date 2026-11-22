@@ -382,7 +382,7 @@ function previewPixels(doc, settings, width, height) {
   const angle = settings.angle * Math.PI / 180;
   const dx = Math.cos(angle), dy = -Math.sin(angle);
   const gradientSpan = Math.abs(dx) * geometry.spanX + Math.abs(dy) * geometry.spanY;
-  const background = [22, 22, 29], artboard = [32, 33, 42], grid = [41, 43, 54];
+  const background = [18, 18, 18], artboard = [29, 29, 29], grid = [40, 40, 40];
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
