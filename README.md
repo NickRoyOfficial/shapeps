@@ -4,7 +4,7 @@ ShapePS generates geometric shapes and randomized organic blobs in Photoshop. Th
 
 ## Install the panel
 
-1. Download **ShapePS.ccx** from [GitHub Releases](https://github.com/NickRoyOfficial/shapeps/releases).
+1. Use the **Download ShapePS.ccx** link in the [GitHub release notes](https://github.com/NickRoyOfficial/shapeps/releases).
 2. Double-click the installer and confirm installation in Adobe Creative Cloud Desktop.
 3. Open **Plugins → ShapePS** in Photoshop and drag its tab into your panel dock. If Adobe prompts you to restart Photoshop, reopen it after installation.
 
@@ -20,4 +20,4 @@ For the standalone version, clone this repo and open `Shape-Studio.psjs` from **
 
 ## Package from VS Code
 
-After editing `panel/engine.js` or the panel files, run `python tools/package_panel.py path/to/ShapePS.ccx`. This syncs the standalone script with the shared engine and builds the installer. Bump the version in `panel/manifest.json` before attaching `ShapePS.ccx` to a release tagged with that version.
+After editing `panel/engine.js` or the panel files, run `python tools/package_panel.py path/to/ShapePS.ccx`. This syncs the standalone script with the shared engine and builds the installer. Bump the version in `panel/manifest.json` before creating the corresponding GitHub release. The update checker reads either a release asset named `ShapePS.ccx` or `installers/ShapePS.ccx` on that release's tag.
