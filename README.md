@@ -1,22 +1,23 @@
 # ShapePS
 
-ShapePS is a Photoshop pop-up for generating geometric shapes and randomized organic blobs on the active canvas. It includes solid fills, two-color linear gradients, and adjustable topo lines.
+ShapePS generates geometric shapes and randomized organic blobs in Photoshop. The dockable panel has a live preview, a color picker for fills and contours, linear gradients, and editable Vector and merged Raster output.
 
-- **Vector shape** creates editable paths and fills. Topo lines use a separate shape layer.
-- **Raster pixels** creates one pixel layer with the chosen fill and lines.
+## Install the panel
 
-## Run in Photoshop
+1. Download **ShapePS.ccx** from [GitHub Releases](https://github.com/NickRoyOfficial/shapeps/releases).
+2. Double-click the installer and confirm installation in Adobe Creative Cloud Desktop.
+3. Open **Plugins → ShapePS** in Photoshop and drag its tab into your panel dock. If Adobe prompts you to restart Photoshop, reopen it after installation.
 
-1. Clone this repo in GitHub Desktop. You can open the folder in VS Code to edit the script.
-2. Open a single-canvas RGB document in Photoshop.
-3. Choose **File → Scripts → Browse**, then select `Shape-Studio.psjs` from the cloned folder.
+This build targets Photoshop 26.7 or newer. Installing a CCX uses Adobe’s installer and does not require the UXP Developer Tool.
 
-This prototype targets Photoshop 26.7 on Windows. Photoshop runs the script directly, so you can use your existing Creative Cloud install.
+## Install updates
 
-## Try an update
+In the panel, click **Check updates**. When a newer installer is available, click **Install** and confirm in Adobe’s installer. The button checks packaged GitHub releases. For development with the UXP Developer Tool, load `panel/manifest.json` with **Load & Watch** to pick up committed source changes as GitHub Desktop pulls them.
 
-Click **Fetch origin**, then **Pull origin** when an update is available in GitHub Desktop. Run the same `Shape-Studio.psjs` again in Photoshop. Photoshop can stay open between runs.
+## Run the pop-up
 
-## First test
+For the standalone version, clone this repo and open `Shape-Studio.psjs` from **File → Scripts → Browse** with a single-canvas RGB document active. You can pull updates and run it again with Photoshop open.
 
-Generate a vector blob with a gradient and topo lines. Then run the script again in Raster mode and check that the result is one pixel layer. Each run should be one Undo step.
+## Package from VS Code
+
+After editing `panel/engine.js` or the panel files, run `python tools/package_panel.py path/to/ShapePS.ccx`. This syncs the standalone script with the shared engine and builds the installer. Bump the version in `panel/manifest.json` before attaching `ShapePS.ccx` to a release tagged with that version.

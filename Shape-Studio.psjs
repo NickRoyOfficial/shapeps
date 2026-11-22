@@ -1,6 +1,8 @@
 // Shape Studio for Photoshop 26.7. Run from File > Scripts > Browse.
-const { app, action, constants, imaging } = require("photoshop");
 const { script } = require("uxp");
+
+// Begin shared engine. Sync with tools/package_panel.py.
+const { app, action, constants, imaging } = require("photoshop");
 const shapes = ["Organic blob", "Circle", "Oval", "Square", "Rectangle",
   "Triangle", "Diamond", "Pentagon", "Hexagon", "Star"];
 
@@ -168,8 +170,7 @@ async function selectLayer(id, add = false) {
   await play(descriptor);
 }
 
-async function generate(doc, settings) {
-  const history = script.executionContext.hostControl;
+async function generate(doc, settings, history) {
   const suspension = await history.suspendHistory({ documentID: doc.id, name: "Generate Shape Studio shape" });
   try {
     let selectionChannel;
@@ -301,8 +302,8 @@ function previewPixels(doc, settings, width, height) {
   return pixels;
 }
 
-async function previewImage(doc, settings) {
-  const width = previewWidth * 2, height = previewHeight * 2;
+async function previewImage(doc, settings, viewWidth = previewWidth, viewHeight = previewHeight) {
+  const width = viewWidth * 2, height = viewHeight * 2;
   const imageData = await imaging.createImageDataFromBuffer(previewPixels(doc, settings, width, height), {
     width, height, components: 3, colorSpace: "RGB", colorProfile: "sRGB IEC61966-2.1"
   });
@@ -313,6 +314,7 @@ async function previewImage(doc, settings) {
     imageData.dispose();
   }
 }
+// End shared engine.
 
 function picker(id, label, options) {
   const items = options.map((name, i) =>
@@ -465,7 +467,7 @@ try {
     throw new Error("This build uses an RGB document with a single canvas.");
   }
   const settings = await askSettings(doc);
-  if (settings) await generate(doc, settings);
+  if (settings) await generate(doc, settings, script.executionContext.hostControl);
 } catch (error) {
   await app.showAlert("Shape Studio\n" + (error.message || error));
 }

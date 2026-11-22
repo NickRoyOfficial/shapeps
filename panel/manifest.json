@@ -1,0 +1,29 @@
+{
+  "manifestVersion": 5,
+  "id": "com.nickroy.shapeps",
+  "name": "ShapePS",
+  "version": "0.1.0",
+  "main": "index.html",
+  "host": { "app": "PS", "minVersion": "26.7.0" },
+  "entrypoints": [
+    {
+      "type": "panel",
+      "id": "shapeps",
+      "label": { "default": "ShapePS" },
+      "minimumSize": { "width": 240, "height": 320 },
+      "preferredDockedSize": { "width": 308, "height": 670 },
+      "preferredFloatingSize": { "width": 338, "height": 700 }
+    }
+  ],
+  "requiredPermissions": {
+    "network": {
+      "domains": [
+        "https://api.github.com",
+        "https://github.com",
+        "https://release-assets.githubusercontent.com",
+        "https://objects.githubusercontent.com"
+      ]
+    },
+    "launchProcess": { "schemes": ["https"], "extensions": [".ccx"] }
+  }
+}

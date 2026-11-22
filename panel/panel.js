@@ -1,0 +1,390 @@
+const { app, action, constants, core } = require("photoshop");
+const { entrypoints } = require("uxp");
+const { shapes, generate, previewImage } = require("./engine.js");
+const { checkForUpdate, installUpdate, openReleases } = require("./updates.js");
+
+const defaults = {
+  shape: 0, seed: 38, size: 60, output: 0, fill: 0,
+  first: "5128C8", second: "FF9C57", angle: 45, count: 7, line: "FFF3E5"
+};
+const colorNames = ["first", "second", "line"];
+const preferencesKey = "shapeps.settings";
+const get = id => document.getElementById(id);
+const hexColor = value => /^[0-9a-f]{6}$/i.test(value);
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+let settings = { ...defaults };
+let picker = null;
+let renderTimer, previewRevision = 0;
+let documentKey;
+let update = null;
+let initialized = false;
+let generating = false;
+
+function restoreSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(preferencesKey));
+    if (!saved) return;
+    for (const name of colorNames) {
+      if (hexColor(saved[name])) settings[name] = saved[name];
+    }
+    const limits = {
+      shape: [0, shapes.length - 1], seed: [0, 999999], size: [2, 96],
+      output: [0, 1], fill: [0, 1], angle: [-180, 180], count: [0, 18]
+    };
+    for (const [name, [min, max]] of Object.entries(limits)) {
+      if (Number.isInteger(saved[name]) && saved[name] >= min && saved[name] <= max) {
+        settings[name] = saved[name];
+      }
+    }
+  } catch (error) {
+    console.warn("ShapePS could not read saved settings", error);
+  }
+}
+
+function rememberSettings() {
+  try {
+    localStorage.setItem(preferencesKey, JSON.stringify(settings));
+  } catch (error) {
+    console.warn("ShapePS could not save settings", error);
+  }
+}
+
+function showStatus(message = "") {
+  const status = get("status");
+  status.textContent = message;
+  status.hidden = !message;
+}
+
+function currentDocument() {
+  const doc = app.documents.length ? app.activeDocument : null;
+  return doc?.mode === constants.DocumentMode.RGB && !doc.artboards.length ? doc : null;
+}
+
+function setPreviewStatus(message) {
+  const status = get("preview-status");
+  status.textContent = message;
+  status.hidden = !message;
+  get("preview").hidden = Boolean(message);
+}
+
+function refreshPreview(force = false) {
+  const doc = currentDocument();
+  const key = doc ? [doc.id, doc.width, doc.height].join("/") : "";
+  if (!force && key === documentKey) return;
+  documentKey = key;
+  clearTimeout(renderTimer);
+  const revision = ++previewRevision;
+  get("generate").disabled = generating || !doc;
+  if (!doc) {
+    setPreviewStatus("Open a single-canvas RGB document");
+    return;
+  }
+
+  const visibleSettings = picker ? { ...settings, [picker.name]: picker.hex } : { ...settings };
+  renderTimer = setTimeout(async () => {
+    try {
+      const src = await previewImage(doc, visibleSettings, 280, 138);
+      if (revision !== previewRevision) return;
+      get("preview").src = src;
+      setPreviewStatus("");
+    } catch (error) {
+      if (revision === previewRevision) setPreviewStatus("Preview unavailable");
+      console.warn("ShapePS preview", error);
+    }
+  }, 55);
+}
+
+function setSegment(id, selected) {
+  const button = get(id);
+  button.className = "segment" + (selected ? " selected" : "");
+  button.setAttribute("aria-pressed", String(selected));
+}
+
+function syncControls() {
+  get("preset").value = String(settings.shape);
+  get("seed-row").hidden = settings.shape !== 0;
+  for (const field of ["seed", "size", "count", "angle"]) get(field).value = String(settings[field]);
+  get("size-value").textContent = settings.size + "%";
+  get("count-value").textContent = String(settings.count);
+  get("angle-value").textContent = settings.angle + "°";
+
+  setSegment("vector", settings.output === 0);
+  setSegment("raster", settings.output === 1);
+  setSegment("solid", settings.fill === 0);
+  setSegment("gradient", settings.fill === 1);
+  get("first-label").textContent = settings.fill ? "Start color" : "Fill color";
+  get("second").hidden = settings.fill === 0;
+  get("angle-row").hidden = settings.fill === 0;
+  get("line").disabled = settings.count === 0;
+  syncSwatches();
+}
+
+function syncSwatches() {
+  for (const name of colorNames) {
+    const active = picker?.name === name;
+    const value = active ? picker.hex : settings[name];
+    get(name + "-chip").style.backgroundColor = "#" + value;
+    get(name).setAttribute("aria-expanded", String(active));
+  }
+}
+
+function hexToHsv(hex) {
+  const [r, g, b] = hex.match(/../g).map(value => parseInt(value, 16) / 255);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const delta = max - min;
+  let hue = 0;
+  if (delta) {
+    if (max === r) hue = (g - b) / delta;
+    else if (max === g) hue = 2 + (b - r) / delta;
+    else hue = 4 + (r - g) / delta;
+    hue = (Math.round(hue * 60) + 360) % 360;
+  }
+  return { hue, saturation: max ? delta / max : 0, value: max };
+}
+
+function hsvToHex(hue, saturation, value) {
+  const channel = offset => {
+    const sector = (offset + hue / 60) % 6;
+    const component = value - value * saturation * Math.max(0, Math.min(sector, 4 - sector, 1));
+    return Math.round(component * 255).toString(16).padStart(2, "0");
+  };
+  return (channel(5) + channel(3) + channel(1)).toUpperCase();
+}
+
+function paintPicker(updateHexField) {
+  const { hex, hue, saturation, value } = picker;
+  get("hue").value = String(hue);
+  get("hue-value").textContent = hue + "°";
+  get("color-plane").style.backgroundColor = "#" + hsvToHex(hue, 1, 1);
+  get("color-marker").style.left = saturation * 100 + "%";
+  get("color-marker").style.top = (1 - value) * 100 + "%";
+  if (updateHexField) get("hex").value = "#" + hex;
+  get("color-error").hidden = true;
+  get("hex").setAttribute("aria-invalid", "false");
+  syncSwatches();
+  refreshPreview(true);
+}
+
+function updatePicker(values) {
+  Object.assign(picker, values);
+  picker.hex = hsvToHex(picker.hue, picker.saturation, picker.value);
+  paintPicker(true);
+}
+
+function beginColor(name) {
+  const wasOpen = picker?.name === name;
+  finishColor(false);
+  if (wasOpen) return;
+  const hex = settings[name];
+  picker = { name, hex, ...hexToHsv(hex) };
+  get(name === "line" ? "line-picker" : "fill-picker").appendChild(get("picker"));
+  get("picker").hidden = false;
+  paintPicker(true);
+  get("hue").focus();
+}
+
+function finishColor(apply, restoreFocus = false) {
+  if (!picker) return true;
+  const name = picker.name;
+  if (apply) {
+    const hex = get("hex").value.trim().replace(/^#/, "");
+    if (!hexColor(hex)) {
+      get("color-error").hidden = false;
+      get("hex").setAttribute("aria-invalid", "true");
+      get("hex").focus();
+      return false;
+    }
+    settings[name] = hex.toUpperCase();
+    rememberSettings();
+  }
+  picker = null;
+  get("picker").hidden = true;
+  syncSwatches();
+  refreshPreview(true);
+  if (restoreFocus) get(name).focus();
+  return true;
+}
+
+function pickAtPointer(event) {
+  if (!picker) return;
+  const plane = get("color-plane");
+  const rect = plane.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  updatePicker({
+    saturation: clamp((event.clientX - rect.left) / rect.width, 0, 1),
+    value: clamp(1 - (event.clientY - rect.top) / rect.height, 0, 1)
+  });
+}
+
+async function generateShape() {
+  if (generating) return;
+  if (!finishColor(true)) return;
+  if (settings.shape === 0 && !/^\d{1,6}$/.test(get("seed").value.trim())) {
+    showStatus("Enter a blob seed from 0 to 999999.");
+    get("seed").focus();
+    return;
+  }
+  const requested = { ...settings };
+  generating = true;
+  get("generate").disabled = true;
+  showStatus("Generating…");
+  try {
+    await core.executeAsModal(async context => {
+      const doc = currentDocument();
+      if (!doc) throw new Error("Open a single-canvas RGB document.");
+      await generate(doc, requested, context.hostControl);
+    }, { commandName: "Generate ShapePS shape" });
+    showStatus(requested.output ? "Raster layer added." : "Vector shape added.");
+  } catch (error) {
+    showStatus(error.message || String(error));
+  } finally {
+    generating = false;
+    get("generate").disabled = !currentDocument();
+  }
+}
+
+async function handleUpdate() {
+  const button = get("update"), status = get("update-status");
+  get("update-message").hidden = false;
+  get("releases").hidden = true;
+  button.disabled = true;
+  try {
+    if (update) {
+      status.textContent = "Downloading " + update.tag + "…";
+      await installUpdate(update);
+      status.textContent = "Confirm the update in Adobe’s installer.";
+    } else {
+      status.textContent = "Checking GitHub…";
+      const { version, available, published } = await checkForUpdate();
+      update = available;
+      if (available) {
+        button.textContent = "Install " + available.tag;
+        status.textContent = "A new build is available.";
+      } else {
+        status.textContent = published ? "ShapePS " + version + " is up to date." : "No installers are published yet.";
+      }
+    }
+  } catch (error) {
+    status.textContent = "Update unavailable. " + error.message;
+    get("releases").hidden = false;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function initialize() {
+  if (initialized) return;
+  initialized = true;
+  restoreSettings();
+  get("preset").innerHTML = shapes.map((name, i) => '<option value="' + i + '">' + name + '</option>').join("");
+  syncControls();
+
+  for (const [id, key, value] of [
+    ["solid", "fill", 0], ["gradient", "fill", 1], ["vector", "output", 0], ["raster", "output", 1]
+  ]) {
+    get(id).addEventListener("click", () => {
+      if (id === "solid" && picker?.name === "second") finishColor(false);
+      settings[key] = value;
+      syncControls();
+      rememberSettings();
+      refreshPreview(true);
+    });
+  }
+
+  get("preset").addEventListener("change", () => {
+    settings.shape = Number(get("preset").value);
+    syncControls();
+    rememberSettings();
+    refreshPreview(true);
+  });
+  get("random").addEventListener("click", () => {
+    settings.shape = 0;
+    settings.seed = (settings.seed + 1 + Math.floor(Math.random() * 999999)) % 1000000;
+    syncControls();
+    rememberSettings();
+    refreshPreview(true);
+  });
+  for (const id of ["size", "count", "angle"]) {
+    const changed = () => {
+      settings[id] = Number(get(id).value);
+      if (!settings.count && picker?.name === "line") finishColor(false);
+      syncControls();
+      rememberSettings();
+      refreshPreview(true);
+    };
+    get(id).addEventListener("input", changed);
+    get(id).addEventListener("change", changed);
+  }
+  const seedChanged = () => {
+    const seed = get("seed").value.trim();
+    if (!/^\d{1,6}$/.test(seed)) return;
+    settings.seed = Number(seed);
+    showStatus();
+    rememberSettings();
+    refreshPreview(true);
+  };
+  get("seed").addEventListener("input", seedChanged);
+  get("seed").addEventListener("change", seedChanged);
+
+  for (const name of colorNames) get(name).addEventListener("click", () => beginColor(name));
+  get("dismiss-color").addEventListener("click", () => finishColor(false, true));
+  get("apply-color").addEventListener("click", () => finishColor(true, true));
+  const changeHue = () => { if (picker) updatePicker({ hue: Number(get("hue").value) }); };
+  get("hue").addEventListener("input", changeHue);
+  get("hue").addEventListener("change", changeHue);
+  get("hex").addEventListener("input", () => {
+    const hex = get("hex").value.trim().replace(/^#/, "");
+    if (!picker || !hexColor(hex)) return;
+    Object.assign(picker, hexToHsv(hex), { hex: hex.toUpperCase() });
+    paintPicker(false);
+  });
+
+  const plane = get("color-plane");
+  let dragging = false;
+  plane.addEventListener("mousedown", event => {
+    dragging = true;
+    pickAtPointer(event);
+  });
+  plane.addEventListener("mousemove", event => { if (dragging) pickAtPointer(event); });
+  document.addEventListener("mouseup", () => { dragging = false; });
+  plane.addEventListener("keydown", event => {
+    const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowDown: [0, -1], ArrowUp: [0, 1] }[event.key];
+    if (!delta || !picker) return;
+    event.preventDefault();
+    const step = event.shiftKey ? 0.1 : 0.01;
+    updatePicker({
+      saturation: clamp(picker.saturation + delta[0] * step, 0, 1),
+      value: clamp(picker.value + delta[1] * step, 0, 1)
+    });
+  });
+  get("picker").addEventListener("keydown", event => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      finishColor(false, true);
+    }
+  });
+
+  get("generate").addEventListener("click", generateShape);
+  get("update").addEventListener("click", handleUpdate);
+  get("releases").addEventListener("click", async () => {
+    try { await openReleases(); }
+    catch (error) { get("update-status").textContent = error.message; }
+  });
+
+  Promise.resolve(action.addNotificationListener(
+    ["open", "close", "select", "make", "imageSize", "canvasSize", "convertMode"], () => refreshPreview()
+  )).catch(error => console.warn("ShapePS document notifications", error));
+  refreshPreview(true);
+}
+
+entrypoints.setup({
+  panels: {
+    shapeps: {
+      show() {
+        initialize();
+        refreshPreview(true);
+      }
+    }
+  }
+});
