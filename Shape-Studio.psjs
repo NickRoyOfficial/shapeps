@@ -137,15 +137,18 @@ async function makeShape(doc, name, paths, fill) {
       _obj: "delete", _target: [{ _ref: "path", ...enumeration("path", "vectorMask") }, layerRef(layer.id)]
     });
   }
-  const path = await doc.pathItems.add("Shape Studio temporary " + Date.now(), paths);
-  await path.select();
+  const pathName = `Shape Studio temporary ${layer.id}-${Date.now()}`;
+  // Address the saved path by name because the result of add() can lack PathItem methods.
+  await doc.pathItems.add(pathName, paths);
+  const pathRef = { _ref: "path", _name: pathName };
+  await play({ _obj: "select", _target: [pathRef] });
   await play({
     _obj: "make",
     _target: [{ _ref: "path" }, layerRef(layer.id)],
     at: { _ref: "path", ...enumeration("path", "vectorMask") },
     using: { _ref: "path", ...enumeration("ordinal", "targetEnum") }
   });
-  await path.remove();
+  await play({ _obj: "delete", _target: [pathRef] });
   layer.name = name;
   return layer;
 }
