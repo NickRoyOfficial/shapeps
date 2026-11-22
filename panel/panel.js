@@ -16,6 +16,8 @@ const defaults = {
 const colorNames = ["first", "second", "line"];
 const preferencesKey = "shapeps.settings";
 const paletteKey = "shapeps.importedSwatches";
+const folderStates = new Map();
+const searchFolderStates = new Map();
 const get = id => document.getElementById(id);
 const hexColor = value => /^[0-9a-f]{6}$/i.test(value);
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -181,7 +183,7 @@ function hsvToHex(hue, saturation, value) {
 
 function syncPaletteSelection() {
   if (!picker || !swatchesOpen) return;
-  for (const button of get("swatch-list").querySelectorAll("button")) {
+  for (const button of get("swatch-list").querySelectorAll(".swatch-chip")) {
     button.setAttribute("aria-pressed", String(button.getAttribute("data-hex") === picker.hex));
   }
 }
@@ -190,6 +192,43 @@ function pickHex(hex) {
   hex = hex.toUpperCase();
   Object.assign(picker, hexToHsv(hex), { hex });
   paintPicker(true);
+}
+
+function appendSwatchFolder(list, group, index, searching) {
+  const chips = document.createElement("div");
+  chips.className = "swatch-chips";
+  if (group) {
+    const toggle = document.createElement("button");
+    const arrow = document.createElement("span");
+    const label = document.createElement("span");
+    chips.id = "swatch-folder-" + index;
+    toggle.type = "button";
+    toggle.className = "swatch-folder-toggle";
+    toggle.title = group;
+    toggle.setAttribute("aria-controls", chips.id);
+    arrow.className = "swatch-folder-arrow";
+    arrow.setAttribute("aria-hidden", "true");
+    label.className = "swatch-folder-name";
+    label.textContent = group;
+    toggle.appendChild(arrow);
+    toggle.appendChild(label);
+
+    const states = searching ? searchFolderStates : folderStates;
+    const setExpanded = expanded => {
+      chips.hidden = !expanded;
+      arrow.textContent = expanded ? "▾" : "▸";
+      toggle.setAttribute("aria-expanded", String(expanded));
+    };
+    setExpanded(states.get(group) ?? searching);
+    toggle.addEventListener("click", () => {
+      const expanded = chips.hidden;
+      states.set(group, expanded);
+      setExpanded(expanded);
+    });
+    list.appendChild(toggle);
+  }
+  list.appendChild(chips);
+  return chips;
 }
 
 function renderPalette() {
@@ -203,19 +242,12 @@ function renderPalette() {
     (palette ? (matches.length ? `${palette.name} · ${countLabel}` : "No matching swatches.")
       : "Import an .ACO or .ASE swatch palette.");
   list.textContent = "";
-  let group, chips;
+  const folders = new Map();
   for (const swatch of matches) {
-    if (group !== swatch.group) {
-      group = swatch.group;
-      if (group) {
-        const label = document.createElement("p");
-        label.className = "swatch-group-label";
-        label.textContent = group;
-        list.appendChild(label);
-      }
-      chips = document.createElement("div");
-      chips.className = "swatch-chips";
-      list.appendChild(chips);
+    let chips = folders.get(swatch.group);
+    if (!chips) {
+      chips = appendSwatchFolder(list, swatch.group, folders.size, Boolean(search));
+      folders.set(swatch.group, chips);
     }
     const button = document.createElement("button");
     const label = swatch.name ? `${swatch.name} · #${swatch.hex}` : `#${swatch.hex}`;
@@ -243,6 +275,8 @@ async function loadPalette(importFile) {
     if (!next) return;
     if (!next.colors.length) throw new Error("No supported colors were found in this palette.");
     palette = next;
+    folderStates.clear();
+    searchFolderStates.clear();
     get("swatch-search").value = "";
     if (importFile) {
       try { localStorage.setItem(paletteKey, JSON.stringify(palette)); }
@@ -468,7 +502,10 @@ function initialize() {
   get("picker-swatches-tab").addEventListener("click", () => showPickerSwatches(true));
   get("photoshop-swatches").addEventListener("click", () => loadPalette(false));
   get("import-swatches").addEventListener("click", () => loadPalette(true));
-  get("swatch-search").addEventListener("input", renderPalette);
+  get("swatch-search").addEventListener("input", () => {
+    searchFolderStates.clear();
+    renderPalette();
+  });
   get("use-foreground").addEventListener("click", useForeground);
   get("dismiss-color").addEventListener("click", () => finishColor(false, true));
   get("apply-color").addEventListener("click", () => finishColor(true, true));
