@@ -24,7 +24,8 @@ def package(destination):
     if destination.suffix.lower() != ".ccx":
         raise ValueError("Use a .ccx destination.")
     manifest = json.loads((PANEL / "manifest.json").read_text(encoding="utf-8"))
-    filenames = ["manifest.json", manifest["main"], "panel.css", "panel.js", "engine.js", "uxp-host.js", "updates.js"]
+    filenames = ["manifest.json", manifest["main"], "panel.css", "panel.js", "engine.js", "uxp-host.js", "updates.js",
+                 "swatches.js"]
     for entry in manifest["entrypoints"]:
         filenames.extend(icon["path"] for icon in entry.get("icons", []))
     destination.parent.mkdir(parents=True, exist_ok=True)

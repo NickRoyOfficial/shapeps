@@ -5,6 +5,42 @@ function ShapePS_id(name) {
     return stringIDToTypeID(name);
 }
 
+function ShapePS_foregroundColor() {
+    return app.foregroundColor.rgb.hexValue;
+}
+
+function ShapePS_exportSwatches(filename) {
+    try {
+        // Export the application palette to a temporary ACO without selecting its swatches.
+        var target = new ActionReference();
+        target.putProperty(ShapePS_id("property"), ShapePS_id("colors"));
+        target.putEnumerated(ShapePS_id("application"), ShapePS_id("ordinal"), ShapePS_id("targetEnum"));
+        var descriptor = new ActionDescriptor();
+        descriptor.putPath(ShapePS_id("null"), new File(filename));
+        descriptor.putReference(ShapePS_id("to"), target);
+        executeAction(ShapePS_id("set"), descriptor, DialogModes.NO);
+        return "ok";
+    } catch (error) {
+        return error.message || String(error);
+    }
+}
+
+function ShapePS_convertSwatchColors(swatches) {
+    var result = [];
+    for (var i = 0; i < swatches.length; i++) {
+        try {
+            var swatch = swatches[i];
+            var color = new SolidColor();
+            var model = color[swatch.model];
+            for (var key in swatch.channels) model[key] = swatch.channels[key];
+            result.push(color.rgb.hexValue);
+        } catch (error) {
+            result.push("");
+        }
+    }
+    return result.join(",");
+}
+
 function ShapePS_docId() {
     var ref = new ActionReference();
     ref.putProperty(ShapePS_id("property"), ShapePS_id("documentID"));

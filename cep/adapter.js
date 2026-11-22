@@ -1,7 +1,11 @@
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { execFile } = require("child_process");
 const engine = require("../panel/engine.js");
+const { readSwatches } = require("../panel/swatches.js");
+
+const scriptString = value => JSON.stringify(value).replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
 
 function locateGit() {
   const candidates = [
@@ -37,8 +41,7 @@ module.exports = function createCepHost(browser, extensionRoot) {
 
   function loadScript() {
     if (!loaded) {
-      const script = JSON.stringify(jsx).replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
-      loaded = evalScript('($.evalFile(new File(' + script + ')), "ready")');
+      loaded = evalScript('($.evalFile(new File(' + scriptString(jsx) + ')), "ready")');
     }
     return loaded;
   }
@@ -75,6 +78,39 @@ module.exports = function createCepHost(browser, extensionRoot) {
     const scene = engine.legacyScene(doc, settings);
     const result = await evalScript("ShapePS_generate(" + JSON.stringify(scene) + ")");
     if (result !== "ok") throw new Error(result || "Photoshop could not create the shape.");
+  }
+
+  async function foregroundColor() {
+    await loadScript();
+    return evalScript("ShapePS_foregroundColor()");
+  }
+
+  async function convertColors(swatches) {
+    await loadScript();
+    const result = await evalScript("ShapePS_convertSwatchColors(" + JSON.stringify(swatches) + ")");
+    return result.split(",");
+  }
+
+  async function photoshopSwatches() {
+    await loadScript();
+    const folder = await fs.promises.mkdtemp(path.join(os.tmpdir(), "shapeps-swatches-"));
+    try {
+      const filename = path.join(folder, "Photoshop.aco");
+      const result = await evalScript("ShapePS_exportSwatches(" + scriptString(filename) + ")");
+      if (result !== "ok") throw new Error(result);
+      return await readSwatches(await fs.promises.readFile(filename), convertColors);
+    } finally {
+      await fs.promises.rm(folder, { recursive: true, force: true }).catch(error =>
+        console.warn("ShapePS could not remove its temporary swatch file", error));
+    }
+  }
+
+  async function importSwatches() {
+    const result = browser.cep.fs.showOpenDialog(false, false, "Import Swatches", "", ["aco", "ase"]);
+    if (result.err) throw new Error("Could not open the swatch file picker.");
+    const filename = result.data?.[0];
+    if (!filename) return null;
+    return { name: path.basename(filename), colors: await readSwatches(await fs.promises.readFile(filename), convertColors) };
   }
 
   async function previewImage(doc, settings, viewWidth, viewHeight) {
@@ -125,6 +161,9 @@ module.exports = function createCepHost(browser, extensionRoot) {
     shapes: engine.shapes,
     currentDocument: () => activeDocument,
     generate,
+    foregroundColor,
+    photoshopSwatches,
+    importSwatches,
     previewImage,
     onShow: show => show(),
     onDocumentChange,

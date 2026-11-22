@@ -1,7 +1,8 @@
 const { app, action, constants, core } = require("photoshop");
-const { entrypoints } = require("uxp");
+const { entrypoints, storage } = require("uxp");
 const engine = require("./engine.js");
 const updates = require("./updates.js");
+const { readSwatches } = require("./swatches.js");
 
 function currentDocument() {
   const doc = app.documents.length ? app.activeDocument : null;
@@ -16,6 +17,23 @@ async function generate(settings) {
   }, { commandName: "Generate ShapePS shape" });
 }
 
+async function importSwatches() {
+  const file = await storage.localFileSystem.getFileForOpening({ types: ["aco", "ase"] });
+  if (!file) return null;
+  const bytes = await file.read({ format: storage.formats.binary });
+  const colors = await readSwatches(bytes, swatches => swatches.map(swatch => {
+    try {
+      const color = new app.SolidColor();
+      const model = color[swatch.model];
+      for (const [key, value] of Object.entries(swatch.channels)) model[key] = value;
+      return color.rgb.hexValue;
+    } catch (error) {
+      return "";
+    }
+  }));
+  return { name: file.name, colors };
+}
+
 function onDocumentChange(listener) {
   Promise.resolve(action.addNotificationListener(
     ["open", "close", "select", "make", "imageSize", "canvasSize", "convertMode"], listener
@@ -27,6 +45,8 @@ module.exports = {
   currentDocument,
   previewImage: engine.previewImage,
   generate,
+  foregroundColor: () => app.foregroundColor.rgb.hexValue,
+  importSwatches,
   onShow: show => entrypoints.setup({ panels: { shapeps: { show } } }),
   onDocumentChange,
   ...updates

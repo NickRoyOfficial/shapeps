@@ -90,15 +90,34 @@
       <div id="line-picker"></div>
     </section>
     <div id="picker" class="picker" hidden>
-      <div id="color-plane" class="color-plane" tabindex="0" role="group"
-        aria-label="Saturation and brightness. Use arrow keys to adjust.">
-        <div class="color-white"></div>
-        <div class="color-black"></div>
-        <div id="color-marker" class="color-marker"></div>
+      <div class="segments picker-mode" role="group" aria-label="Color source">
+        <button id="picker-color-tab" type="button" class="segment selected" aria-pressed="true" aria-controls="picker-color">Color</button>
+        <button id="picker-swatches-tab" type="button" class="segment" aria-pressed="false" aria-controls="picker-swatches">Swatches</button>
       </div>
-      <div class="range-row">
-        <div class="range-label"><label for="hue">Hue</label><output id="hue-value"></output></div>
-        <input id="hue" type="range" min="0" max="359" value="0">
+      <div id="picker-color">
+        <div id="color-plane" class="color-plane" tabindex="0" role="group"
+          aria-label="Saturation and brightness. Use arrow keys to adjust.">
+          <div class="color-white"></div>
+          <div class="color-black"></div>
+          <div id="color-marker" class="color-marker"></div>
+        </div>
+        <div class="range-row">
+          <div class="range-label"><label for="hue">Hue</label><output id="hue-value"></output></div>
+          <input id="hue" type="range" min="0" max="359" value="0">
+        </div>
+      </div>
+      <div id="picker-swatches" hidden>
+        <div class="swatch-actions">
+          <button id="photoshop-swatches" type="button" title="Refresh from Photoshop's Swatches panel">Photoshop</button>
+          <button id="import-swatches" type="button" title="Import an Adobe .ACO or .ASE swatch file">Import…</button>
+        </div>
+        <p id="swatch-status" class="swatch-status" role="status"></p>
+        <div id="swatch-filter" hidden>
+          <label for="swatch-search" class="sr-label">Search swatches</label>
+          <input id="swatch-search" type="text" placeholder="Search swatches" spellcheck="false">
+        </div>
+        <div id="swatch-list" class="swatch-list" aria-label="Available swatches" role="group"></div>
+        <button id="use-foreground" type="button" class="quiet" title="Use the color selected in Photoshop's Swatches panel">Use foreground</button>
       </div>
       <div class="picker-actions">
         <label for="hex">Hex</label>

@@ -16,6 +16,7 @@
     }
   ],
   "requiredPermissions": {
+    "localFileSystem": "request",
     "network": {
       "domains": [
         "https://api.github.com",

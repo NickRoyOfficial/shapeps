@@ -15,6 +15,7 @@ const defaults = {
 };
 const colorNames = ["first", "second", "line"];
 const preferencesKey = "shapeps.settings";
+const paletteKey = "shapeps.importedSwatches";
 const get = id => document.getElementById(id);
 const hexColor = value => /^[0-9a-f]{6}$/i.test(value);
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -22,6 +23,11 @@ const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 let settings = { ...defaults };
 const usesSeed = () => settings.shape === 0 || settings.variation === 1;
 let picker = null;
+let swatchesOpen = false;
+let palette = null;
+let paletteBusy = false;
+let paletteError = "";
+let autoLoadSwatches = true;
 let renderTimer, previewRevision = 0;
 let documentKey;
 let update = null;
@@ -55,6 +61,19 @@ function rememberSettings() {
     localStorage.setItem(preferencesKey, JSON.stringify(settings));
   } catch (error) {
     console.warn("ShapePS could not save settings", error);
+  }
+}
+
+function restorePalette() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(paletteKey));
+    if (typeof saved?.name === "string" && Array.isArray(saved.colors)) {
+      const colors = saved.colors.filter(item => typeof item?.name === "string" &&
+        typeof item.group === "string" && hexColor(item.hex));
+      if (colors.length) palette = { name: saved.name, colors };
+    }
+  } catch (error) {
+    console.warn("ShapePS could not read its imported swatches", error);
   }
 }
 
@@ -160,6 +179,106 @@ function hsvToHex(hue, saturation, value) {
   return (channel(5) + channel(3) + channel(1)).toUpperCase();
 }
 
+function syncPaletteSelection() {
+  if (!picker || !swatchesOpen) return;
+  for (const button of get("swatch-list").querySelectorAll("button")) {
+    button.setAttribute("aria-pressed", String(button.getAttribute("data-hex") === picker.hex));
+  }
+}
+
+function pickHex(hex) {
+  hex = hex.toUpperCase();
+  Object.assign(picker, hexToHsv(hex), { hex });
+  paintPicker(true);
+}
+
+function renderPalette() {
+  const list = get("swatch-list");
+  const search = get("swatch-search").value.trim().toLowerCase();
+  const colors = palette?.colors || [];
+  const matches = colors.filter(({ name, group, hex }) => `${name} ${group} #${hex}`.toLowerCase().includes(search));
+  const countLabel = `${matches.length} ${matches.length === 1 ? "swatch" : "swatches"}`;
+  get("swatch-filter").hidden = !colors.length;
+  get("swatch-status").textContent = paletteBusy ? "Loading swatches…" : paletteError ||
+    (palette ? (matches.length ? `${palette.name} · ${countLabel}` : "No matching swatches.")
+      : "Import an .ACO or .ASE swatch palette.");
+  list.textContent = "";
+  let group, chips;
+  for (const swatch of matches) {
+    if (group !== swatch.group) {
+      group = swatch.group;
+      if (group) {
+        const label = document.createElement("p");
+        label.className = "swatch-group-label";
+        label.textContent = group;
+        list.appendChild(label);
+      }
+      chips = document.createElement("div");
+      chips.className = "swatch-chips";
+      list.appendChild(chips);
+    }
+    const button = document.createElement("button");
+    const label = swatch.name ? `${swatch.name} · #${swatch.hex}` : `#${swatch.hex}`;
+    button.type = "button";
+    button.className = "swatch-chip";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.setAttribute("data-hex", swatch.hex);
+    button.style.backgroundColor = "#" + swatch.hex;
+    button.addEventListener("click", () => { if (picker) pickHex(swatch.hex); });
+    chips.appendChild(button);
+  }
+  syncPaletteSelection();
+}
+
+async function loadPalette(importFile) {
+  if (paletteBusy) return;
+  autoLoadSwatches = false;
+  paletteBusy = true;
+  paletteError = "";
+  get("photoshop-swatches").disabled = get("import-swatches").disabled = true;
+  get("swatch-status").textContent = "Loading swatches…";
+  try {
+    const next = importFile ? await host.importSwatches() : { name: "Photoshop", colors: await host.photoshopSwatches() };
+    if (!next) return;
+    if (!next.colors.length) throw new Error("No supported colors were found in this palette.");
+    palette = next;
+    get("swatch-search").value = "";
+    if (importFile) {
+      try { localStorage.setItem(paletteKey, JSON.stringify(palette)); }
+      catch (error) { paletteError = "Palette loaded for this session."; }
+    }
+  } catch (error) {
+    paletteError = importFile ? error.message : "Photoshop swatches unavailable. Import a palette or use foreground.";
+  } finally {
+    paletteBusy = false;
+    get("photoshop-swatches").disabled = get("import-swatches").disabled = false;
+    renderPalette();
+  }
+}
+
+function showPickerSwatches(show) {
+  swatchesOpen = show;
+  setSegment("picker-color-tab", !show);
+  setSegment("picker-swatches-tab", show);
+  get("picker-color").hidden = show;
+  get("picker-swatches").hidden = !show;
+  if (!show) return;
+  renderPalette();
+  if (autoLoadSwatches && !palette && host.photoshopSwatches) loadPalette(false);
+}
+
+async function useForeground() {
+  const target = picker;
+  try {
+    const hex = await host.foregroundColor();
+    if (!hexColor(hex)) throw new Error("No foreground color was returned.");
+    if (picker && picker === target) pickHex(hex);
+  } catch (error) {
+    if (picker === target) get("swatch-status").textContent = "Could not read Photoshop's foreground color.";
+  }
+}
+
 function paintPicker(updateHexField) {
   const { hex, hue, saturation, value } = picker;
   get("hue").value = String(hue);
@@ -171,6 +290,7 @@ function paintPicker(updateHexField) {
   get("color-error").hidden = true;
   get("hex").setAttribute("aria-invalid", "false");
   syncSwatches();
+  syncPaletteSelection();
   refreshPreview(true);
 }
 
@@ -188,8 +308,9 @@ function beginColor(name) {
   picker = { name, hex, ...hexToHsv(hex) };
   get(name === "line" ? "line-picker" : "fill-picker").appendChild(get("picker"));
   get("picker").hidden = false;
+  showPickerSwatches(swatchesOpen);
   paintPicker(true);
-  get("hue").focus();
+  get(swatchesOpen ? "picker-swatches-tab" : "hue").focus();
 }
 
 function finishColor(apply, restoreFocus = false) {
@@ -288,6 +409,7 @@ function initialize() {
   if (initialized) return;
   initialized = true;
   restoreSettings();
+  restorePalette();
   get("preset").innerHTML = shapes.map((name, i) => '<option value="' + i + '">' + name + '</option>').join("");
   syncControls();
 
@@ -341,6 +463,13 @@ function initialize() {
   get("seed").addEventListener("change", seedChanged);
 
   for (const name of colorNames) get(name).addEventListener("click", () => beginColor(name));
+  get("photoshop-swatches").hidden = !host.photoshopSwatches;
+  get("picker-color-tab").addEventListener("click", () => showPickerSwatches(false));
+  get("picker-swatches-tab").addEventListener("click", () => showPickerSwatches(true));
+  get("photoshop-swatches").addEventListener("click", () => loadPalette(false));
+  get("import-swatches").addEventListener("click", () => loadPalette(true));
+  get("swatch-search").addEventListener("input", renderPalette);
+  get("use-foreground").addEventListener("click", useForeground);
   get("dismiss-color").addEventListener("click", () => finishColor(false, true));
   get("apply-color").addEventListener("click", () => finishColor(true, true));
   const changeHue = () => { if (picker) updatePicker({ hue: Number(get("hue").value) }); };
