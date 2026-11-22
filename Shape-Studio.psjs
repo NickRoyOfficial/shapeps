@@ -1,5 +1,5 @@
 // Shape Studio for Photoshop 26.7. Run from File > Scripts > Browse.
-const { app, action, constants } = require("photoshop");
+const { app, action, constants, imaging } = require("photoshop");
 const { script } = require("uxp");
 const shapes = ["Organic blob", "Circle", "Oval", "Square", "Rectangle",
   "Triangle", "Diamond", "Pentagon", "Hexagon", "Star"];
@@ -33,12 +33,12 @@ function outline(shape, seed) {
     const next = points[(i + 1) % count];
     const dx = smooth ? (next[0] - prev[0]) / 6 : 0;
     const dy = smooth ? (next[1] - prev[1]) / 6 : 0;
-    return { anchor: [x, y], left: [x - dx, y - dy], right: [x + dx, y + dy], smooth };
+    return { anchor: [x, y], incoming: [x - dx, y - dy], outgoing: [x + dx, y + dy], smooth };
   });
 }
 
 function fittedOutline(points, width, height, size) {
-  const all = points.flatMap(p => [p.anchor, p.left, p.right]);
+  const all = points.flatMap(p => [p.anchor, p.incoming, p.outgoing]);
   const x = all.map(p => p[0]), y = all.map(p => p[1]);
   const left = Math.min(...x), right = Math.max(...x);
   const top = Math.min(...y), bottom = Math.max(...y);
@@ -62,25 +62,34 @@ function subpath(geometry, ratio = 1, subtract = false) {
     const point = new app.PathPointInfo();
     point.kind = p.smooth ? constants.PointKind.SMOOTHPOINT : constants.PointKind.CORNERPOINT;
     point.anchor = position(p.anchor);
-    point.leftDirection = position(p.left);
-    point.rightDirection = position(p.right);
+    // Photoshop's leftDirection leaves this knot. rightDirection enters it.
+    point.leftDirection = position(p.outgoing);
+    point.rightDirection = position(p.incoming);
     return point;
   });
   return path;
 }
 
-function bands(geometry, count) {
-  const paths = [];
+function contourIntervals(count) {
   const step = 0.81 / (count + 1);
-  for (let i = 1; i <= count; i++) {
-    const outer = 1 - i * step;
-    paths.push(subpath(geometry, outer), subpath(geometry, outer - step * 0.18, true));
-  }
-  return paths;
+  return Array.from({ length: count }, (_, i) => {
+    const outer = 1 - (i + 1) * step;
+    return [outer, outer - step * 0.18];
+  });
+}
+
+function bands(geometry, count) {
+  return contourIntervals(count).flatMap(([outer, inner]) => [
+    subpath(geometry, outer), subpath(geometry, inner, true)
+  ]);
+}
+
+function rgb(hex) {
+  return hex.match(/../g).map(pair => parseInt(pair, 16));
 }
 
 function color(hex) {
-  const [red, grain, blue] = hex.match(/../g).map(pair => parseInt(pair, 16));
+  const [red, grain, blue] = rgb(hex);
   return { _obj: "RGBColor", red, grain, blue };
 }
 
@@ -208,93 +217,387 @@ async function generate(doc, settings) {
   await history.resumeHistory(suspension, true);
 }
 
-function picker(id, title, options) {
-  const items = options.map((name, i) =>
-    '<sp-menu-item' + (i === 0 ? ' selected' : '') + '>' + name + '</sp-menu-item>').join('');
-  return '<div><sp-label for="' + id + '">' + title + '</sp-label><sp-dropdown id="' + id +
-    '" style="width:100%"><sp-menu slot="options">' + items + '</sp-menu></sp-dropdown></div>';
-}
-
-function field(id, title, initial) {
-  return '<div><sp-label for="' + id + '">' + title + '</sp-label><sp-textfield id="' + id +
-    '" value="' + initial + '" style="width:100%"></sp-textfield></div>';
-}
-
-async function askSettings() {
-  const dialog = document.createElement("dialog");
-  dialog.style.width = "430px";
-  dialog.style.padding = "20px";
-  dialog.innerHTML = `
-    <sp-heading size="L">Shape Studio</sp-heading>
-    <div style="margin-top:12px">${picker("shape", "Shape library", shapes)}</div>
-    <div style="display:flex;margin-top:8px">
-      <div style="flex:1;margin-right:8px">${field("seed", "Blob seed", "38")}</div>
-      <sp-button id="random" variant="secondary" style="align-self:flex-end">Randomize blob</sp-button>
-    </div>
-    <div style="display:flex;margin-top:8px">
-      <div style="flex:1;margin-right:8px">${picker("output", "Output", ["Vector shape", "Raster pixels"])}</div>
-      <div style="flex:1">${field("size", "Size (%)", "60")}</div>
-    </div>
-    <div style="margin-top:8px">${picker("fill", "Fill", ["Solid", "Linear gradient"])}</div>
-    <div style="display:flex;margin-top:8px">
-      <div style="flex:1;margin-right:8px">${field("first", "Fill color", "#5128C8")}</div>
-      <div style="flex:1;margin-right:8px">${field("second", "Gradient end", "#FF9C57")}</div>
-      <div style="flex:1">${field("angle", "Angle (°)", "45")}</div>
-    </div>
-    <div style="display:flex;margin-top:8px">
-      <div style="flex:1;margin-right:8px">${field("count", "Topo lines (0–18)", "7")}</div>
-      <div style="flex:1">${field("line", "Line color", "#FFF3E5")}</div>
-    </div>
-    <sp-body id="status" size="S"></sp-body>
-    <footer style="display:flex;justify-content:flex-end;margin-top:12px">
-      <sp-button id="cancel" variant="secondary" style="margin-right:8px">Cancel</sp-button>
-      <sp-button id="generate" variant="cta">Generate shape</sp-button>
-    </footer>`;
-  document.body.appendChild(dialog);
-  const get = id => dialog.querySelector("#" + id);
-  const index = id => Math.max(0, get(id).selectedIndex || 0);
-  const number = (id, min, max, label) => {
-    const input = get(id).value.trim();
-    const n = Number(input);
-    if (!input || !Number.isInteger(n) || n < min || n > max) {
-      throw new Error(label + " needs a whole number from " + min + " to " + max + ".");
-    }
-    return n;
-  };
-  const hex = (id, label) => {
-    const value = get(id).value.trim().replace(/^#/, "");
-    if (!/^[0-9a-f]{6}$/i.test(value)) throw new Error(label + " needs a six-digit hex color.");
-    return value;
-  };
-  let settings = null;
-  get("random").addEventListener("click", () => {
-    get("shape").selectedIndex = 0;
-    get("seed").value = String(1 + Math.floor(Math.random() * 999999));
+function sampleOutline(points) {
+  return points.flatMap((point, i) => {
+    if (!point.smooth) return [point.anchor];
+    const next = points[(i + 1) % points.length];
+    return Array.from({ length: 12 }, (_, step) => {
+      const t = step / 12, s = 1 - t;
+      return point.anchor.map((start, axis) =>
+        s ** 3 * start + 3 * s ** 2 * t * point.outgoing[axis]
+        + 3 * s * t ** 2 * next.incoming[axis] + t ** 3 * next.anchor[axis]
+      );
+    });
   });
+}
+
+function paintMask(mask, width, height, polygon, value) {
+  const rows = polygon.map(point => point[1]);
+  const top = Math.max(0, Math.ceil(Math.min(...rows) - 0.5));
+  const bottom = Math.min(height, Math.ceil(Math.max(...rows) - 0.5));
+  for (let y = top; y < bottom; y++) {
+    const scan = y + 0.5;
+    const crossings = [];
+    for (let i = 0; i < polygon.length; i++) {
+      const [ax, ay] = polygon[i];
+      const [bx, by] = polygon[(i + 1) % polygon.length];
+      if ((ay > scan) !== (by > scan)) crossings.push(ax + (scan - ay) * (bx - ax) / (by - ay));
+    }
+    crossings.sort((a, b) => a - b);
+    for (let i = 0; i + 1 < crossings.length; i += 2) {
+      const left = Math.max(0, Math.ceil(crossings[i] - 0.5));
+      const right = Math.min(width, Math.ceil(crossings[i + 1] - 0.5));
+      mask.fill(value, y * width + left, y * width + right);
+    }
+  }
+}
+
+const previewWidth = 336;
+const previewHeight = 320;
+
+function previewPixels(doc, settings, width, height) {
+  const frameScale = Math.min((width - 48) / doc.width, (height - 48) / doc.height);
+  const frameWidth = doc.width * frameScale;
+  const frameHeight = doc.height * frameScale;
+  const left = (width - frameWidth) / 2;
+  const top = (height - frameHeight) / 2;
+  const geometry = fittedOutline(outline(settings.shape, settings.seed), frameWidth, frameHeight, settings.size);
+  const samples = sampleOutline(geometry.points);
+  const contour = ratio => samples.map(([x, y]) => [
+    left + geometry.x + x * geometry.scale * ratio, top + geometry.y + y * geometry.scale * ratio
+  ]);
+  const fill = new Uint8Array(width * height);
+  const lines = new Uint8Array(width * height);
+  paintMask(fill, width, height, contour(1), 1);
+  for (const [outer, inner] of contourIntervals(settings.count)) {
+    paintMask(lines, width, height, contour(outer), 1);
+    paintMask(lines, width, height, contour(inner), 0);
+  }
+
+  const pixels = new Uint8Array(width * height * 3);
+  const start = rgb(settings.first);
+  const end = settings.fill ? rgb(settings.second) : start;
+  const line = settings.count ? rgb(settings.line) : start;
+  const angle = settings.angle * Math.PI / 180;
+  const dx = Math.cos(angle), dy = -Math.sin(angle);
+  const gradientSpan = Math.abs(dx) * geometry.spanX + Math.abs(dy) * geometry.spanY;
+  const background = [22, 22, 29], artboard = [32, 33, 42], grid = [41, 43, 54];
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const index = y * width + x;
+      const onArtboard = x >= left && x < left + frameWidth && y >= top && y < top + frameHeight;
+      const gridLine = Math.floor(x - left) % 38 === 0 || Math.floor(y - top) % 38 === 0;
+      const backdrop = onArtboard ? (gridLine ? grid : artboard) : background;
+      const position = 0.5 + ((x - width / 2) * dx + (y - height / 2) * dy) / gradientSpan;
+      const mix = Math.max(0, Math.min(1, position));
+      for (let channel = 0; channel < 3; channel++) {
+        pixels[index * 3 + channel] = lines[index] ? line[channel]
+          : fill[index] ? Math.round(start[channel] + mix * (end[channel] - start[channel]))
+          : backdrop[channel];
+      }
+    }
+  }
+  return pixels;
+}
+
+async function previewImage(doc, settings) {
+  const width = previewWidth * 2, height = previewHeight * 2;
+  const imageData = await imaging.createImageDataFromBuffer(previewPixels(doc, settings, width, height), {
+    width, height, components: 3, colorSpace: "RGB", colorProfile: "sRGB IEC61966-2.1"
+  });
+  try {
+    const jpeg = await imaging.encodeImageData({ imageData, base64: true });
+    return "data:image/jpeg;base64," + jpeg;
+  } finally {
+    imageData.dispose();
+  }
+}
+
+const studioStyles = `
+  .shape-studio {
+    box-sizing: border-box; width: 700px; max-width: 96vw; padding: 0;
+    border: 1px solid #3c3c49; border-radius: 14px; background: #21212a; color: #f5f4fa;
+    font-family: "Segoe UI", sans-serif; font-size: 13px;
+  }
+  .shape-studio * { box-sizing: border-box; }
+  .shape-header, .shape-footer {
+    display: flex; justify-content: space-between; align-items: center; padding: 18px 22px;
+  }
+  .shape-header { border-bottom: 1px solid #353542; }
+  .shape-title { margin: 0; font-size: 27px; font-weight: 700; letter-spacing: -0.6px; }
+  .shape-body {
+    display: flex; flex-wrap: wrap; align-items: flex-start; padding: 20px 22px;
+    overflow-y: auto; max-height: 70vh;
+  }
+  .shape-left { flex: 1 1 336px; min-width: 260px; margin-right: 20px; }
+  .shape-controls { flex: 1 1 258px; min-width: 240px; }
+  .shape-inline { display: flex; align-items: center; justify-content: space-between; }
+  .shape-eyebrow {
+    margin: 0 0 11px; color: #c2bcd5; font-size: 11px; font-weight: 700; letter-spacing: 1.1px;
+  }
+  .shape-preview-header { margin-bottom: 10px; }
+  .shape-preview-header .shape-eyebrow { margin: 0; }
+  .shape-preview {
+    width: 100%; height: 320px; overflow: hidden; border: 1px solid #393944;
+    border-radius: 9px; background: #16161d; position: relative;
+  }
+  .shape-preview img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .shape-preview-message { position: absolute; top: 144px; width: 100%; text-align: center; color: #c2bcd5; }
+  .shape-seed { margin-top: 12px; }
+  .shape-seed input { width: 108px; }
+  .shape-output { display: flex; align-items: center; }
+  .shape-output .shape-caption { margin-right: 10px; }
+  .shape-caption { color: #c8c4d5; font-size: 12px; }
+  .shape-segments {
+    display: flex; padding: 3px; background: #16161d; border: 1px solid #424250; border-radius: 7px;
+  }
+  .shape-studio button {
+    appearance: none; min-height: 30px; padding: 0 11px; border: 1px solid #515163;
+    border-radius: 5px; background: #2b2b36; color: #f4f2fb; font-size: 12px; font-weight: 600;
+  }
+  .shape-segments button { flex: 1; border-color: transparent; background: transparent; }
+  .shape-segments button.selected { background: #494263; color: #faf6ff; }
+  .shape-studio button:hover { border-color: #bdb0f8; }
+  .shape-studio :focus { outline: 2px solid #c2b5ff; outline-offset: 2px; }
+  .shape-section + .shape-section { border-top: 1px solid #393944; margin-top: 14px; padding-top: 13px; }
+  .shape-studio label { display: block; color: #e4e0ee; font-size: 12px; margin-bottom: 5px; }
+  .shape-studio select, .shape-studio input[type="text"] {
+    color: #f6f3fa; background: #2b2b36; border: 1px solid #515163;
+    border-radius: 5px; padding: 4px 7px; height: 31px;
+  }
+  .shape-studio select { width: 100%; }
+  .shape-studio input[type="text"] { appearance: none; font-family: Consolas, monospace; }
+  .shape-studio input[type="range"] { width: 100%; margin: 0; accent-color: #c2b5ff; }
+  .shape-range { margin-top: 9px; }
+  .shape-range label { margin-bottom: 3px; }
+  .shape-value { color: #d9ceff; font-family: Consolas, monospace; font-size: 12px; }
+  .shape-colors { display: flex; margin-top: 9px; }
+  .shape-color { min-width: 0; flex: 1; }
+  .shape-color + .shape-color { margin-left: 8px; }
+  .shape-color-entry { display: flex; align-items: center; }
+  .shape-color-entry input { flex: 1; min-width: 70px; width: 100%; }
+  .shape-swatch { width: 17px; height: 17px; border: 1px solid #9f9cac; border-radius: 4px; margin-right: 6px; }
+  .shape-line-color { margin-top: 7px; }
+  .shape-footer { border-top: 1px solid #353542; padding-top: 14px; padding-bottom: 14px; }
+  .shape-status { color: #ffbbae; margin: 0 14px 0 0; font-size: 12px; max-width: 56%; }
+  .shape-actions { display: flex; margin-left: auto; }
+  .shape-actions button { min-height: 37px; }
+  .shape-studio .shape-generate {
+    margin-left: 8px; padding: 0 16px; border-color: #c2b5ff; background: #c2b5ff; color: #1e1833;
+  }
+  .shape-studio .shape-generate:hover { background: #ddd4ff; }
+  @media (max-width: 685px) {
+    .shape-left { flex-basis: 100%; min-width: 0; margin-right: 0; margin-bottom: 18px; }
+    .shape-controls { flex-basis: 100%; min-width: 0; }
+    .shape-preview { height: 210px; }
+    .shape-preview-message { top: 91px; }
+  }
+  @media (max-width: 400px) {
+    .shape-header, .shape-footer { flex-wrap: wrap; }
+    .shape-output { margin-top: 8px; }
+    .shape-status { max-width: 100%; }
+  }
+`;
+
+function rangeField(id, title, min, max, initial, suffix = "") {
+  return `<div class="shape-range">
+    <div class="shape-inline">
+      <label for="${id}">${title}</label>
+      <span class="shape-value" id="${id}-value">${initial}${suffix}</span>
+    </div>
+    <input type="range" id="${id}" min="${min}" max="${max}" value="${initial}">
+  </div>`;
+}
+
+function colorField(id, title, initial) {
+  return `<div class="shape-color" id="${id}-field">
+    <label for="${id}" id="${id}-label">${title}</label>
+    <div class="shape-color-entry">
+      <span class="shape-swatch" id="${id}-swatch" style="background:${initial}"></span>
+      <input type="text" id="${id}" value="${initial}" maxlength="7">
+    </div>
+  </div>`;
+}
+
+async function askSettings(doc) {
+  const dialog = document.createElement("dialog");
+  const stylesheet = document.createElement("style");
+  stylesheet.textContent = studioStyles;
+  dialog.className = "shape-studio";
+  dialog.setAttribute("aria-labelledby", "shape-title");
+  dialog.innerHTML = `
+    <header class="shape-header">
+      <h1 class="shape-title" id="shape-title">Shape Studio</h1>
+      <div class="shape-output">
+        <span class="shape-caption">Output</span>
+        <div class="shape-segments" role="group" aria-label="Output">
+          <button id="vector" type="button" class="selected" aria-pressed="true">Vector</button>
+          <button id="raster" type="button" aria-pressed="false">Raster</button>
+        </div>
+      </div>
+    </header>
+    <div class="shape-body">
+      <section class="shape-left">
+        <div class="shape-inline shape-preview-header">
+          <h2 class="shape-eyebrow">PREVIEW</h2>
+          <button id="random" type="button">Randomize blob</button>
+        </div>
+        <div class="shape-preview">
+          <img id="preview" width="${previewWidth}" height="${previewHeight}" alt="Shape preview" style="display:none">
+          <span id="preview-message" class="shape-preview-message">Rendering preview…</span>
+        </div>
+        <div id="seed-row" class="shape-inline shape-seed">
+          <label for="seed">Blob seed</label>
+          <input type="text" id="seed" value="38" maxlength="6">
+        </div>
+      </section>
+      <div class="shape-controls">
+        <section class="shape-section">
+          <h2 class="shape-eyebrow">SHAPE</h2>
+          <label for="shape">Preset</label>
+          <select id="shape">${shapes.map((name, i) => `<option value="${i}">${name}</option>`).join("")}</select>
+          ${rangeField("size", "Size", 2, 96, 60, "%")}
+        </section>
+        <section class="shape-section">
+          <h2 class="shape-eyebrow">FILL</h2>
+          <div class="shape-segments" role="group" aria-label="Fill type">
+            <button id="solid" type="button" class="selected" aria-pressed="true">Solid</button>
+            <button id="gradient" type="button" aria-pressed="false">Gradient</button>
+          </div>
+          <div class="shape-colors">
+            ${colorField("first", "Fill color", "#5128C8")}
+            ${colorField("second", "End color", "#FF9C57")}
+          </div>
+          <div id="angle-row">${rangeField("angle", "Angle", -180, 180, 45, "°")}</div>
+        </section>
+        <section class="shape-section">
+          <h2 class="shape-eyebrow">CONTOURS</h2>
+          ${rangeField("count", "Topo lines", 0, 18, 7)}
+          <div class="shape-line-color">${colorField("line", "Line color", "#FFF3E5")}</div>
+        </section>
+      </div>
+    </div>
+    <footer class="shape-footer">
+      <p id="status" class="shape-status" role="status" aria-live="polite"></p>
+      <div class="shape-actions">
+        <button id="cancel" type="button">Cancel</button>
+        <button id="generate" class="shape-generate" type="button">Generate shape</button>
+      </div>
+    </footer>`;
+  document.head.appendChild(stylesheet);
+  document.body.appendChild(dialog);
+
+  const get = id => dialog.querySelector("#" + id);
+  const numericValue = id => Number(get(id).value);
+  const colorValue = id => String(get(id).value).trim().replace(/^#/, "");
+  const isHex = value => /^[0-9a-f]{6}$/i.test(value);
+  const visible = (id, show, layout = "block") => { get(id).style.display = show ? layout : "none"; };
+  const toggle = (id, active) => {
+    const button = get(id);
+    button.className = active ? "selected" : "";
+    button.setAttribute("aria-pressed", String(active));
+  };
+
+  let fill = 0, output = 0;
+  let settings = null;
+  let redraw, revision = 0;
+
+  function readSettings() {
+    const shape = numericValue("shape"), count = numericValue("count");
+    const seedText = String(get("seed").value).trim();
+    if (shape === 0 && !/^\d{1,6}$/.test(seedText)) throw new Error("Enter a blob seed from 0 to 999999.");
+    const first = colorValue("first"), second = colorValue("second"), line = colorValue("line");
+    if (!isHex(first)) throw new Error("Enter a six-digit hex value for the fill color.");
+    if (fill && !isHex(second)) throw new Error("Enter a six-digit hex value for the gradient end color.");
+    if (count && !isHex(line)) throw new Error("Enter a six-digit hex value for the line color.");
+    return { shape, count, fill, output, seed: shape === 0 ? Number(seedText) : 0,
+      size: numericValue("size"), angle: fill ? numericValue("angle") : 0, first, second, line };
+  }
+
+  function refresh() {
+    toggle("solid", fill === 0);
+    toggle("gradient", fill === 1);
+    toggle("vector", output === 0);
+    toggle("raster", output === 1);
+    visible("seed-row", numericValue("shape") === 0, "flex");
+    visible("second-field", fill === 1);
+    visible("angle-row", fill === 1);
+    visible("line-field", numericValue("count") > 0);
+    get("first-label").textContent = fill ? "Start color" : "Fill color";
+    get("size-value").textContent = numericValue("size") + "%";
+    get("count-value").textContent = String(numericValue("count"));
+    get("angle-value").textContent = numericValue("angle") + "°";
+    for (const id of ["first", "second", "line"]) {
+      const value = colorValue(id);
+      if (isHex(value)) get(id + "-swatch").style.backgroundColor = "#" + value;
+    }
+
+    clearTimeout(redraw);
+    const render = ++revision;
+    let draft;
+    try {
+      draft = readSettings();
+      get("status").textContent = "";
+    } catch (error) {
+      get("status").textContent = error.message;
+      return;
+    }
+
+    redraw = setTimeout(async () => {
+      try {
+        const src = await previewImage(doc, draft);
+        if (render !== revision) return;
+        get("preview").src = src;
+        visible("preview", true);
+        visible("preview-message", false);
+      } catch (error) {
+        if (render !== revision) return;
+        visible("preview", false);
+        get("preview-message").textContent = "Preview unavailable";
+        visible("preview-message", true);
+      }
+    }, 55);
+  }
+
+  get("random").addEventListener("click", () => {
+    get("shape").value = "0";
+    get("seed").value = String(1 + Math.floor(Math.random() * 999999));
+    refresh();
+  });
+  ["solid", "gradient"].forEach((id, i) => get(id).addEventListener("click", () => {
+    fill = i;
+    refresh();
+  }));
+  ["vector", "raster"].forEach((id, i) => get(id).addEventListener("click", () => {
+    output = i;
+    toggle("vector", output === 0);
+    toggle("raster", output === 1);
+  }));
+  for (const id of ["seed", "size", "angle", "count", "first", "second", "line"]) {
+    get(id).addEventListener("input", refresh);
+    get(id).addEventListener("change", refresh);
+  }
+  get("shape").addEventListener("change", refresh);
   get("cancel").addEventListener("click", () => dialog.close());
   get("generate").addEventListener("click", () => {
     try {
-      const shape = index("shape"), fill = index("fill");
-      const count = number("count", 0, 18, "Topo lines");
-      settings = {
-        shape, fill, count, output: index("output"),
-        size: number("size", 2, 96, "Size"),
-        seed: shape === 0 ? number("seed", 0, 999999, "Blob seed") : 0,
-        first: hex("first", "Fill color"),
-        second: fill === 1 ? hex("second", "Gradient end") : null,
-        angle: fill === 1 ? number("angle", -180, 180, "Angle") : 0,
-        line: count ? hex("line", "Line color") : null
-      };
+      settings = readSettings();
       dialog.close();
     } catch (error) {
       get("status").textContent = error.message;
     }
   });
+
   try {
+    refresh();
     await dialog.showModal();
     return settings;
   } finally {
+    revision++;
+    clearTimeout(redraw);
     document.body.removeChild(dialog);
+    document.head.removeChild(stylesheet);
   }
 }
 
@@ -304,7 +607,7 @@ try {
   if (doc.mode !== constants.DocumentMode.RGB || doc.artboards.length) {
     throw new Error("This build uses an RGB document with a single canvas.");
   }
-  const settings = await askSettings();
+  const settings = await askSettings(doc);
   if (settings) await generate(doc, settings);
 } catch (error) {
   await app.showAlert("Shape Studio\n" + (error.message || error));
