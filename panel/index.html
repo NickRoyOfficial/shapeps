@@ -16,116 +16,154 @@
       <button id="releases" class="quiet" type="button" hidden>Releases</button>
     </div>
 
-    <section class="preview" aria-label="Shape preview">
-      <img id="preview" alt="Preview of the shape with its fill and contour lines" hidden>
-      <p id="preview-status">Open an RGB document</p>
-    </section>
+    <div class="workspace">
+      <div class="canvas-column">
+        <section id="preview-frame" class="preview" aria-label="Shape preview">
+          <img id="preview" alt="Preview of the generated shape" hidden>
+          <p id="preview-status">Open an RGB document</p>
+        </section>
 
-    <div class="output" role="group" aria-label="Output">
-      <button id="vector" type="button" class="segment selected" aria-pressed="true">Vector</button>
-      <button id="raster" type="button" class="segment" aria-pressed="false">Raster</button>
-    </div>
-    <button id="generate" class="generate" type="button">Generate shape</button>
-    <p id="status" class="status" role="status" hidden></p>
+        <div class="output" role="group" aria-label="Output">
+          <button id="vector" type="button" class="segment selected" aria-pressed="true">Vector</button>
+          <button id="raster" type="button" class="segment" aria-pressed="false">Raster</button>
+        </div>
+        <button id="generate" class="generate" type="button">Generate shape</button>
+        <p id="status" class="status" role="status" hidden></p>
+      </div>
 
-    <section class="controls" aria-labelledby="shape-title">
-      <h2 id="shape-title">Shape</h2>
-      <div class="control-pair">
-        <div class="grow">
-          <label class="sr-label" for="preset">Shape preset</label>
-          <select id="preset"></select>
-        </div>
-        <button id="random" type="button" class="secondary">Randomize</button>
-      </div>
-      <div id="shape-mode" class="segments shape-mode" role="group" aria-label="Shape style" hidden>
-        <button id="shape-basic" type="button" class="segment selected" aria-pressed="true">Basic</button>
-        <button id="shape-variation" type="button" class="segment" aria-pressed="false">Variation</button>
-      </div>
-      <div class="range-row">
-        <div class="range-label"><label for="size">Size</label><output id="size-value">60%</output></div>
-        <input id="size" type="range" min="2" max="96" value="60">
-      </div>
-      <div id="complexity-row" class="range-row">
-        <div class="range-label"><label for="complexity">Complexity</label><output id="complexity-value">35%</output></div>
-        <input id="complexity" type="range" min="0" max="100" value="35">
-      </div>
-      <div id="seed-row" class="seed-row">
-        <label for="seed">Seed</label>
-        <input id="seed" type="text" inputmode="numeric" maxlength="6" value="38">
-      </div>
-    </section>
+      <div class="controls-column">
+        <section class="controls" aria-labelledby="shape-title">
+          <h2 id="shape-title">Shape</h2>
+          <div class="control-pair">
+            <div class="grow">
+              <label class="sr-label" for="preset">Shape preset</label>
+              <select id="preset"></select>
+            </div>
+            <button id="random" type="button" class="secondary">Randomize</button>
+          </div>
+          <div id="shape-mode" class="segments shape-mode" role="group" aria-label="Shape style" hidden>
+            <button id="shape-basic" type="button" class="segment selected" aria-pressed="true">Basic</button>
+            <button id="shape-variation" type="button" class="segment" aria-pressed="false">Variation</button>
+          </div>
+          <div class="range-row">
+            <div class="range-label"><label for="size">Size</label><output id="size-value">60%</output></div>
+            <input id="size" type="range" min="2" max="96" value="60">
+          </div>
+          <div id="complexity-row" class="range-row">
+            <div class="range-label"><label for="complexity">Complexity</label><output id="complexity-value">35%</output></div>
+            <input id="complexity" type="range" min="0" max="100" value="35">
+          </div>
+          <div id="seed-row" class="seed-row">
+            <label for="seed">Seed</label>
+            <input id="seed" type="text" inputmode="numeric" maxlength="6" value="38">
+          </div>
+        </section>
 
-    <section class="controls" aria-labelledby="fill-title">
-      <h2 id="fill-title">Fill</h2>
-      <div class="segments" role="group" aria-label="Fill type">
-        <button id="solid" type="button" class="segment selected" aria-pressed="true">Solid</button>
-        <button id="gradient" type="button" class="segment" aria-pressed="false">Gradient</button>
-      </div>
-      <div class="color-row">
-        <button id="first" type="button" class="color-button" aria-expanded="false" aria-controls="picker">
-          <span id="first-chip" class="chip"></span><span id="first-label">Fill color</span>
-        </button>
-        <button id="second" type="button" class="color-button" aria-expanded="false" aria-controls="picker" hidden>
-          <span id="second-chip" class="chip"></span><span>End color</span>
-        </button>
-      </div>
-      <div id="angle-row" class="range-row" hidden>
-        <div class="range-label"><label for="angle">Angle</label><output id="angle-value">45°</output></div>
-        <input id="angle" type="range" min="-180" max="180" value="45">
-      </div>
-      <div id="fill-picker"></div>
-    </section>
+        <section class="controls" aria-labelledby="fill-title">
+          <h2 id="fill-title">Fill</h2>
+          <div class="segments" role="group" aria-label="Fill type">
+            <button id="solid" type="button" class="segment selected" aria-pressed="true">Solid</button>
+            <button id="gradient" type="button" class="segment" aria-pressed="false">Gradient</button>
+          </div>
+          <div class="color-row">
+            <button id="first" type="button" class="color-button" aria-expanded="false" aria-controls="picker">
+              <span id="first-chip" class="chip"></span><span id="first-label">Fill color</span>
+            </button>
+            <button id="second" type="button" class="color-button" aria-expanded="false" aria-controls="picker" hidden>
+              <span id="second-chip" class="chip"></span><span>End color</span>
+            </button>
+          </div>
+          <div id="gradient-editor" hidden>
+            <div class="segments gradient-style" role="group" aria-label="Gradient style">
+              <button id="gradient-linear" type="button" class="segment selected">Linear</button>
+              <button id="gradient-radial" type="button" class="segment">Radial</button>
+            </div>
+            <div class="gradient-timeline">
+              <div id="gradient-ramp" aria-hidden="true"></div>
+              <div id="gradient-stops" role="group" aria-label="Gradient stops"></div>
+            </div>
+            <div class="segments" role="group" aria-label="Edit gradient">
+              <button id="add-stop" type="button" class="segment">Add stop</button>
+              <button id="remove-stop" type="button" class="segment">Remove</button>
+              <button id="reverse-gradient" type="button" class="segment">Reverse</button>
+            </div>
+            <div class="color-row">
+              <button id="stop" type="button" class="color-button" aria-expanded="false" aria-controls="picker">
+                <span id="stop-chip" class="chip"></span><span>Stop color</span>
+              </button>
+            </div>
+            <div class="range-row">
+              <div class="range-label"><label for="stop-position">Stop position</label><output id="stop-position-value"></output></div>
+              <input id="stop-position" type="range" min="0" max="100" value="0">
+            </div>
+            <div class="range-row">
+              <div class="range-label"><label for="stop-opacity">Stop opacity</label><output id="stop-opacity-value"></output></div>
+              <input id="stop-opacity" type="range" min="0" max="100" value="100">
+            </div>
+          </div>
+          <div id="angle-row" class="range-row" hidden>
+            <div class="range-label"><label for="angle">Angle</label><output id="angle-value">45°</output></div>
+            <input id="angle" type="range" min="-180" max="180" value="45">
+          </div>
+          <div id="fill-picker"></div>
+        </section>
 
-    <section class="controls" aria-labelledby="contour-title">
-      <h2 id="contour-title">Contours</h2>
-      <div class="range-row">
-        <div class="range-label"><label for="count">Topo lines</label><output id="count-value">7</output></div>
-        <input id="count" type="range" min="0" max="18" value="7">
-      </div>
-      <div class="color-row">
-        <button id="line" type="button" class="color-button" aria-expanded="false" aria-controls="picker">
-          <span id="line-chip" class="chip"></span><span>Line color</span>
-        </button>
-      </div>
-      <div id="line-picker"></div>
-    </section>
-    <div id="picker" class="picker" hidden>
-      <div class="segments picker-mode" role="group" aria-label="Color source">
-        <button id="picker-color-tab" type="button" class="segment selected" aria-pressed="true" aria-controls="picker-color">Color mixer</button>
-        <button id="picker-swatches-tab" type="button" class="segment" aria-pressed="false" aria-controls="picker-swatches">Swatches</button>
-      </div>
-      <div id="picker-color">
-        <div class="hue-row">
-          <div class="range-label"><label for="hue">Hue</label><output id="hue-value" for="hue"></output></div>
-          <input id="hue" type="range" min="0" max="359" value="0">
+        <section class="controls" aria-labelledby="contour-title">
+          <h2 id="contour-title">Contours</h2>
+          <div class="range-row">
+            <div class="range-label"><label for="count">Topo lines</label><output id="count-value">7</output></div>
+            <input id="count" type="range" min="0" max="18" value="7">
+          </div>
+          <div class="color-row">
+            <button id="line" type="button" class="color-button" aria-expanded="false" aria-controls="picker">
+              <span id="line-chip" class="chip"></span><span>Line color</span>
+            </button>
+          </div>
+          <div id="line-picker"></div>
+        </section>
+        <section class="controls" aria-labelledby="effects-title">
+          <h2 id="effects-title">Effects</h2>
+          <div id="effect-controls"></div>
+        </section>
+        <div id="picker" class="picker" hidden>
+          <div class="segments picker-mode" role="group" aria-label="Color source">
+            <button id="picker-color-tab" type="button" class="segment selected" aria-pressed="true" aria-controls="picker-color">Color mixer</button>
+            <button id="picker-swatches-tab" type="button" class="segment" aria-pressed="false" aria-controls="picker-swatches">Swatches</button>
+          </div>
+          <div id="picker-color">
+            <div class="hue-row">
+              <div class="range-label"><label for="hue">Hue</label><output id="hue-value" for="hue"></output></div>
+              <input id="hue" type="range" min="0" max="359" value="0">
+            </div>
+            <div id="color-plane" class="color-plane" tabindex="0" role="group"
+              aria-label="Saturation and brightness. Use arrow keys to adjust.">
+              <div class="color-white"></div>
+              <div class="color-black"></div>
+              <div id="color-marker" class="color-marker"></div>
+            </div>
+          </div>
+          <div id="picker-swatches" hidden>
+            <div class="swatch-actions">
+              <button id="photoshop-swatches" type="button" title="Refresh from Photoshop's Swatches panel">Photoshop</button>
+              <button id="import-swatches" type="button" title="Import an Adobe .ACO or .ASE swatch file">Import…</button>
+            </div>
+            <p id="swatch-status" class="swatch-status" role="status"></p>
+            <div id="swatch-filter" hidden>
+              <label for="swatch-search" class="sr-label">Search swatches</label>
+              <input id="swatch-search" type="text" placeholder="Search swatches" spellcheck="false">
+            </div>
+            <div id="swatch-list" aria-label="Available swatches" role="group"></div>
+            <button id="use-foreground" type="button" class="quiet" title="Use the color selected in Photoshop's Swatches panel">Use foreground</button>
+          </div>
+          <div class="picker-actions">
+            <label for="hex">Hex</label>
+            <input id="hex" type="text" spellcheck="false" maxlength="7">
+            <button id="dismiss-color" type="button" class="quiet">Cancel</button>
+            <button id="apply-color" type="button" class="secondary">Done</button>
+          </div>
+          <p id="color-error" role="status" hidden>Enter a six-digit hex color.</p>
         </div>
-        <div id="color-plane" class="color-plane" tabindex="0" role="group"
-          aria-label="Saturation and brightness. Use arrow keys to adjust.">
-          <div class="color-white"></div>
-          <div class="color-black"></div>
-          <div id="color-marker" class="color-marker"></div>
-        </div>
       </div>
-      <div id="picker-swatches" hidden>
-        <div class="swatch-actions">
-          <button id="photoshop-swatches" type="button" title="Refresh from Photoshop's Swatches panel">Photoshop</button>
-          <button id="import-swatches" type="button" title="Import an Adobe .ACO or .ASE swatch file">Import…</button>
-        </div>
-        <p id="swatch-status" class="swatch-status" role="status"></p>
-        <div id="swatch-filter" hidden>
-          <label for="swatch-search" class="sr-label">Search swatches</label>
-          <input id="swatch-search" type="text" placeholder="Search swatches" spellcheck="false">
-        </div>
-        <div id="swatch-list" aria-label="Available swatches" role="group"></div>
-        <button id="use-foreground" type="button" class="quiet" title="Use the color selected in Photoshop's Swatches panel">Use foreground</button>
-      </div>
-      <div class="picker-actions">
-        <label for="hex">Hex</label>
-        <input id="hex" type="text" spellcheck="false" maxlength="7">
-        <button id="dismiss-color" type="button" class="quiet">Cancel</button>
-        <button id="apply-color" type="button" class="secondary">Done</button>
-      </div>
-      <p id="color-error" role="status" hidden>Enter a six-digit hex color.</p>
     </div>
   </main>
   <script src="panel.js"></script>

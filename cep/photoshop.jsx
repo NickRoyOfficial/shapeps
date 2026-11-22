@@ -145,10 +145,10 @@ function ShapePS_hasVectorMask(layerInfo) {
     return layerInfo.hasKey(hasMask) && layerInfo.getBoolean(hasMask);
 }
 
-function ShapePS_hasShape(doc, layer, layerInfo) {
+function ShapePS_hasShape(doc, layer, layerInfo, transparent) {
     var empty = ShapePS_id("vectorMaskEmpty");
     return ShapePS_hasVectorMask(layerInfo) && (!layerInfo.hasKey(empty) || !layerInfo.getBoolean(empty)) &&
-        ShapePS_hasCanvasContent(doc, layer);
+        (transparent || ShapePS_hasCanvasContent(doc, layer));
 }
 
 function ShapePS_applyVectorMask(path, replaceMask) {
@@ -189,14 +189,44 @@ function ShapePS_makeShape(doc, definition) {
     if (layer.id === previousId) throw new Error("Photoshop did not create a fill layer.");
 
     var layerInfo = ShapePS_layerInfo(layer);
-    if (!ShapePS_hasShape(doc, layer, layerInfo)) {
+    if (!ShapePS_hasShape(doc, layer, layerInfo, definition.transparent)) {
         ShapePS_applyVectorMask(path, ShapePS_hasVectorMask(layerInfo));
     }
     path.remove();
-    if (!ShapePS_hasShape(doc, layer, ShapePS_layerInfo(layer))) {
+    if (!ShapePS_hasShape(doc, layer, ShapePS_layerInfo(layer), definition.transparent)) {
         throw new Error("Photoshop created an empty layer for " + definition.name + ".");
     }
     layer.name = definition.name;
+    return layer;
+}
+
+function ShapePS_makeEffect(doc, effect) {
+    var place = new ActionDescriptor();
+    place.putPath(ShapePS_id("null"), new File(effect.file));
+    place.putBoolean(ShapePS_id("linked"), false);
+    place.putEnumerated(ShapePS_id("freeTransformCenterState"), ShapePS_id("quadCenterState"), ShapePS_id("QCSAverage"));
+    var previousId = doc.activeLayer.id;
+    executeAction(ShapePS_id("placeEvent"), place, DialogModes.NO);
+    var layer = doc.activeLayer;
+    if (layer.id === previousId) throw new Error("Photoshop did not place " + effect.name + ".");
+    if (layer.grouped) layer.grouped = false;
+
+    // The texture is opaque white where it has no ink, so its bounds include the whole image.
+    var bounds = layer.bounds;
+    var width = bounds[2].as("px") - bounds[0].as("px");
+    var height = bounds[3].as("px") - bounds[1].as("px");
+    if (width <= 0 || height <= 0) throw new Error("Photoshop placed an empty effect layer.");
+    if (Math.abs(width - effect.width) > 0.05 || Math.abs(height - effect.height) > 0.05) {
+        layer.resize(effect.width * 100 / width, effect.height * 100 / height, AnchorPosition.MIDDLECENTER);
+    }
+    bounds = layer.bounds;
+    var dx = effect.left - bounds[0].as("px"), dy = effect.top - bounds[1].as("px");
+    if (Math.abs(dx) > 0.05 || Math.abs(dy) > 0.05) {
+        layer.translate(new UnitValue(dx, "px"), new UnitValue(dy, "px"));
+    }
+    layer.name = effect.name;
+    layer.blendMode = BlendMode.MULTIPLY;
+    layer.opacity = effect.opacity;
     return layer;
 }
 
@@ -216,10 +246,27 @@ function ShapePS_apply() {
 
     var base = ShapePS_makeShape(doc, plan.layers[0]);
     var topo = plan.layers.length > 1 ? ShapePS_makeShape(doc, plan.layers[1]) : null;
+    var effects = plan.effects || [];
     if (plan.output) {
         base.rasterize(RasterizeType.ENTIRELAYER);
+        if (topo) topo.rasterize(RasterizeType.ENTIRELAYER);
+    }
+    if (effects.length) {
+        var effectGroup = doc.layerSets.add();
+        effectGroup.name = plan.name + (plan.output ? " - Raster" : "");
+        base.move(effectGroup, ElementPlacement.INSIDE);
+        var below = base;
+        for (var i = 0; i < effects.length; i++) {
+            doc.activeLayer = below;
+            var layer = ShapePS_makeEffect(doc, effects[i]);
+            layer.move(below, ElementPlacement.PLACEBEFORE);
+            layer.grouped = true;
+            below = layer;
+        }
+        if (topo) topo.move(below, ElementPlacement.PLACEBEFORE);
+        doc.activeLayer = effectGroup;
+    } else if (plan.output) {
         if (topo) {
-            topo.rasterize(RasterizeType.ENTIRELAYER);
             topo.move(base, ElementPlacement.PLACEBEFORE);
             doc.activeLayer = topo;
             base = topo.merge();

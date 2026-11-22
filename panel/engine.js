@@ -180,15 +180,32 @@ function color(hex) {
   return { _obj: "RGBColor", red, grain, blue };
 }
 
+function gradientStops(settings) {
+  return settings.stops?.length >= 2 ? [...settings.stops].sort((a, b) => a.position - b.position) : [
+    { position: 0, color: settings.first, opacity: 100 },
+    { position: 100, color: settings.second, opacity: 100 }
+  ];
+}
+
+function gradientGeometry(settings, geometry) {
+  const angle = settings.angle * Math.PI / 180;
+  const dx = Math.cos(angle), dy = -Math.sin(angle);
+  const radial = settings.gradientType === 1;
+  const span = (width, height) => radial ? Math.hypot(width, height) : Math.abs(dx) * width + Math.abs(dy) * height;
+  const size = span(geometry.spanX, geometry.spanY);
+  const position = radial ? (x, y) => 2 * Math.hypot(x, y) / size : (x, y) => 0.5 + (x * dx + y * dy) / size;
+  return { radial, span, size, position };
+}
+
 function fillOptions(settings, geometry, doc) {
   if (settings.fill === 0) return { _obj: "solidColorLayer", color: color(settings.first) };
-  const radians = settings.angle * Math.PI / 180;
-  const projected = (w, h) => Math.abs(Math.cos(radians)) * w + Math.abs(Math.sin(radians)) * h;
-  const scale = 100 * projected(geometry.spanX, geometry.spanY) / projected(doc.width, doc.height);
-  const stops = [0, 4096];
+  const gradient = gradientGeometry(settings, geometry);
+  const scale = 100 * gradient.size / gradient.span(doc.width, doc.height);
+  const stops = gradientStops(settings);
+  const location = stop => Math.round(stop.position * 4096 / 100);
   return {
     _obj: "gradientLayer",
-    type: enumeration("gradientType", "linear"),
+    type: enumeration("gradientType", gradient.radial ? "radial" : "linear"),
     angle: unit("angleUnit", settings.angle),
     scale: unit("percentUnit", Math.max(1, Math.round(scale))),
     align: false,
@@ -198,14 +215,84 @@ function fillOptions(settings, geometry, doc) {
       name: "Shape Studio gradient",
       gradientForm: enumeration("gradientForm", "customStops"),
       interfaceIconFrameDimmed: 4096,
-      colors: [settings.first, settings.second].map((hex, i) => ({
-        _obj: "colorStop", color: color(hex), location: stops[i], midpoint: 50,
+      colors: stops.map(stop => ({
+        _obj: "colorStop", color: color(stop.color), location: location(stop), midpoint: 50,
         type: enumeration("colorStopType", "userStop")
       })),
-      transparency: stops.map(location => ({ _obj: "transferSpec", location,
-        midpoint: 50, opacity: unit("percentUnit", 100) }))
+      transparency: stops.map(stop => ({ _obj: "transferSpec", location: location(stop),
+        midpoint: 50, opacity: unit("percentUnit", stop.opacity) }))
     }
   };
+}
+
+function clearGradient(settings) {
+  return settings.fill === 1 && gradientStops(settings).every(stop => stop.opacity === 0);
+}
+
+function gradientRamp(stops) {
+  const colors = stops.map(stop => [...rgb(stop.color), stop.opacity / 100]);
+  let lower = 0;
+  return Array.from({ length: 1025 }, (_, i) => {
+    const at = i * 100 / 1024;
+    while (lower < stops.length - 1 && at >= stops[lower + 1].position) lower++;
+    if (at <= stops[lower].position || lower === stops.length - 1) return colors[lower];
+    const mix = (at - stops[lower].position) / (stops[lower + 1].position - stops[lower].position);
+    return colors[lower].map((value, channel) => value + (colors[lower + 1][channel] - value) * mix);
+  });
+}
+
+const effectNames = { grain: "Grain", halftone: "Halftone", hatching: "Hatching" };
+
+function shapeEffects(settings) {
+  return Object.entries(effectNames).filter(([key]) => settings[key]).map(([key, name]) => ({
+    key, name, scale: settings[key + "Scale"] / 100, opacity: settings[key + "Opacity"]
+  }));
+}
+
+function texture(effect, x, y, pixel) {
+  if (effect.key === "grain") {
+    const pitch = 0.009 * effect.scale;
+    let hash = Math.imul(Math.floor(x / pitch), 374761393) ^ Math.imul(Math.floor(y / pitch), 668265263);
+    hash = Math.imul(hash ^ (hash >>> 13), 1274126177);
+    return Math.max(0, ((hash ^ (hash >>> 16)) >>> 0) / 4294967296 * 1.7 - 0.7);
+  }
+  const centered = (value, period) => value - Math.round(value / period) * period;
+  let edge;
+  if (effect.key === "hatching") {
+    const period = 0.048 * effect.scale;
+    edge = period * 0.105 - Math.abs(centered((x + y) * Math.SQRT1_2, period));
+  } else {
+    const period = 0.093 * effect.scale;
+    const radius = period * (0.15 + 0.19 * Math.min(1, Math.max(0, y + 0.5)));
+    edge = radius - Math.hypot(centered(x, period), centered(y, period));
+  }
+  return Math.min(1, Math.max(0, 0.5 + edge / pixel));
+}
+
+function effectPlan(doc, settings, geometry) {
+  const left = Math.max(0, Math.floor((doc.width - geometry.spanX) / 2));
+  const top = Math.max(0, Math.floor((doc.height - geometry.spanY) / 2));
+  const width = doc.width - 2 * left, height = doc.height - 2 * top;
+  return shapeEffects(settings).map(effect => ({ ...effect, left, top, width, height,
+    span: Math.min(geometry.spanX, geometry.spanY) }));
+}
+
+function effectPixels(effect) {
+  // Cap the source bitmap for large documents and let Photoshop scale the layer to its bounds.
+  const ratio = Math.min(1, 3072 / Math.max(effect.width, effect.height));
+  const width = Math.max(1, Math.round(effect.width * ratio));
+  const height = Math.max(1, Math.round(effect.height * ratio));
+  const pixels = new Uint8Array(width * height * 3);
+  const dx = effect.width / width / effect.span, dy = effect.height / height / effect.span;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const coverage = texture(effect, (x + 0.5 - width / 2) * dx, (y + 0.5 - height / 2) * dy, Math.max(dx, dy));
+      const shade = Math.round(255 * (1 - coverage));
+      const offset = (y * width + x) * 3;
+      pixels[offset] = pixels[offset + 1] = pixels[offset + 2] = shade;
+    }
+  }
+  return { width, height, pixels };
 }
 
 async function play(descriptor) {
@@ -256,8 +343,32 @@ async function selectLayer(id, add = false) {
   await play(descriptor);
 }
 
+async function makeEffect(doc, effect) {
+  const { constants, imaging } = require("photoshop");
+  const { pixels, width, height } = effectPixels(effect);
+  const layer = await doc.createLayer({ name: effect.name });
+  const imageData = await imaging.createImageDataFromBuffer(pixels, {
+    width, height, components: 3, colorSpace: "RGB", colorProfile: "sRGB IEC61966-2.1"
+  });
+  try {
+    await imaging.putPixels({ documentID: doc.id, layerID: layer.id, imageData, replace: true, targetBounds: { left: 0, top: 0 } });
+  } finally {
+    imageData.dispose();
+  }
+  if (width !== effect.width || height !== effect.height) {
+    await layer.scale(effect.width * 100 / width, effect.height * 100 / height);
+  }
+  const bounds = layer.boundsNoEffects;
+  const dx = effect.left - bounds.left, dy = effect.top - bounds.top;
+  if (dx || dy) await layer.translate(dx, dy);
+  layer.blendMode = constants.BlendMode.MULTIPLY;
+  layer.opacity = effect.opacity;
+  return layer;
+}
+
 async function generate(doc, settings, history) {
   const { constants } = require("photoshop");
+  if (clearGradient(settings) && !settings.count) throw new Error("Give a gradient stop opacity or add topo lines.");
   const suspension = await history.suspendHistory({ documentID: doc.id, name: "Generate Shape Studio shape" });
   try {
     let selectionChannel;
@@ -273,11 +384,29 @@ async function generate(doc, settings, history) {
     let base = await makeShape(doc, name, [subpath(geometry)], fillOptions(settings, geometry, doc));
     const topo = settings.count > 0 ? await makeShape(doc, "Topo lines", bands(geometry, settings.count),
       { _obj: "solidColorLayer", color: color(settings.line) }) : null;
+    const effects = effectPlan(doc, settings, geometry);
 
     if (settings.output === 1) {
       await base.rasterize(constants.RasterizeType.ENTIRELAYER);
+      if (topo) await topo.rasterize(constants.RasterizeType.ENTIRELAYER);
+    }
+    if (effects.length) {
+      const layers = [];
+      let below = base;
+      for (const effect of effects) {
+        const layer = await makeEffect(doc, effect);
+        await layer.move(below, constants.ElementPlacement.PLACEBEFORE);
+        below = layer;
+        layers.unshift(layer);
+      }
       if (topo) {
-        await topo.rasterize(constants.RasterizeType.ENTIRELAYER);
+        await topo.move(below, constants.ElementPlacement.PLACEBEFORE);
+        layers.unshift(topo);
+      }
+      await doc.createLayerGroup({ name: settings.output ? name + " - Raster" : name, fromLayers: [...layers, base] });
+      for (const layer of layers) if (layer !== topo) layer.isClippingMask = true;
+    } else if (settings.output === 1) {
+      if (topo) {
         await selectLayer(base.id);
         await selectLayer(topo.id, true);
         const selected = Array.from(doc.activeLayers, layer => layer.id);
@@ -371,12 +500,12 @@ function previewPixels(doc, settings, width, height) {
   }
 
   const pixels = new Uint8Array(width * height * 3);
-  const start = rgb(settings.first);
-  const end = settings.fill ? rgb(settings.second) : start;
-  const line = settings.count ? rgb(settings.line) : start;
-  const angle = settings.angle * Math.PI / 180;
-  const dx = Math.cos(angle), dy = -Math.sin(angle);
-  const gradientSpan = Math.abs(dx) * geometry.spanX + Math.abs(dy) * geometry.spanY;
+  const solid = [...rgb(settings.first), 1];
+  const line = settings.count ? rgb(settings.line) : solid;
+  const ramp = settings.fill ? gradientRamp(gradientStops(settings)) : null;
+  const gradient = gradientGeometry(settings, geometry);
+  const effects = shapeEffects(settings);
+  const effectSpan = Math.min(geometry.spanX, geometry.spanY);
   const background = [18, 18, 18], artboard = [29, 29, 29], grid = [40, 40, 40];
 
   for (let y = 0; y < height; y++) {
@@ -385,15 +514,22 @@ function previewPixels(doc, settings, width, height) {
       const onArtboard = x >= left && x < left + frameWidth && y >= top && y < top + frameHeight;
       const gridLine = Math.floor(x - left) % 38 === 0 || Math.floor(y - top) % 38 === 0;
       const backdrop = onArtboard ? (gridLine ? grid : artboard) : background;
-      const position = 0.5 + ((x - width / 2) * dx + (y - height / 2) * dy) / gradientSpan;
-      const mix = Math.max(0, Math.min(1, position));
       const sample = 2 * (y * maskWidth + x);
       const fillCoverage = pixelCoverage(fill, sample, maskWidth);
       const lineCoverage = pixelCoverage(lines, sample, maskWidth);
+      if (!fillCoverage && !lineCoverage) {
+        pixels.set(backdrop, index * 3);
+        continue;
+      }
+      const dx = x + 0.5 - width / 2, dy = y + 0.5 - height / 2;
+      const position = Math.min(1, Math.max(0, gradient.position(dx, dy)));
+      const shade = ramp ? ramp[Math.round(position * 1024)] : solid;
+      let multiply = 1;
+      for (const effect of effects) multiply *= 1 - texture(effect, dx / effectSpan, dy / effectSpan, 1 / effectSpan) * effect.opacity / 100;
+      const ink = (fillCoverage - lineCoverage) * shade[3];
       for (let channel = 0; channel < 3; channel++) {
-        const shade = start[channel] + mix * (end[channel] - start[channel]);
-        pixels[index * 3 + channel] = Math.round(backdrop[channel] * (1 - fillCoverage)
-          + shade * (fillCoverage - lineCoverage) + line[channel] * lineCoverage);
+        pixels[index * 3 + channel] = Math.round(backdrop[channel] * (1 - ink - lineCoverage)
+          + shade[channel] * ink * multiply + line[channel] * lineCoverage);
       }
     }
   }
@@ -415,10 +551,11 @@ async function previewImage(doc, settings, viewWidth = previewWidth, viewHeight 
 }
 
 function legacyScene(doc, settings) {
+  if (clearGradient(settings) && !settings.count) throw new Error("Give a gradient stop opacity or add topo lines.");
   const shape = shapeGeometry(settings, doc.width, doc.height);
   const name = shapes[settings.shape];
   const layers = [{
-    name, fill: fillOptions(settings, shape, doc),
+    name, fill: fillOptions(settings, shape, doc), transparent: clearGradient(settings),
     paths: [{ points: positionedPoints(shape, 1), subtract: false }]
   }];
   if (settings.count) {
@@ -430,7 +567,8 @@ function legacyScene(doc, settings) {
       ])
     });
   }
-  return { id: doc.id, width: doc.width, height: doc.height, name, output: settings.output, layers };
+  return { id: doc.id, width: doc.width, height: doc.height, name, output: settings.output, layers,
+    effects: effectPlan(doc, settings, shape) };
 }
 
-module.exports = { shapes, generate, previewImage, previewPixels, legacyScene };
+module.exports = { shapes, generate, previewImage, previewPixels, legacyScene, effectPixels };

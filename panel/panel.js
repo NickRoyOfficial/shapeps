@@ -11,9 +11,11 @@ const { shapes } = host;
 
 const defaults = {
   shape: 0, seed: 38, size: 60, complexity: 35, variation: 0, output: 0, fill: 0,
-  first: "5128C8", second: "FF9C57", angle: 45, count: 7, line: "FFF3E5"
+  first: "5128C8", second: "FF9C57", angle: 45, gradientType: 0, count: 7, line: "FFF3E5"
 };
 const colorNames = ["first", "second", "line"];
+const colorControls = [...colorNames, "stop"];
+const effects = [["grain", "Grain", 45], ["halftone", "Halftone", 45], ["hatching", "Hatching", 40]];
 const preferencesKey = "shapeps.settings";
 const paletteKey = "shapeps.importedSwatches";
 const folderStates = new Map();
@@ -23,6 +25,13 @@ const hexColor = value => /^[0-9a-f]{6}$/i.test(value);
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
 let settings = { ...defaults };
+for (const [key, , opacity] of effects) {
+  settings[key] = 0;
+  settings[key + "Scale"] = 100;
+  settings[key + "Opacity"] = opacity;
+}
+let selectedStop;
+const stopHandles = new Map();
 const usesSeed = () => settings.shape === 0 || settings.variation === 1;
 let picker = null;
 let swatchesOpen = false;
@@ -46,12 +55,22 @@ function restoreSettings() {
     const limits = {
       shape: [0, shapes.length - 1], seed: [0, 999999], size: [2, 96],
       complexity: [0, 100], variation: [0, 1],
-      output: [0, 1], fill: [0, 1], angle: [-180, 180], count: [0, 18]
+      output: [0, 1], fill: [0, 1], gradientType: [0, 1], angle: [-180, 180], count: [0, 18]
     };
+    for (const [key] of effects) {
+      limits[key] = [0, 1];
+      limits[key + "Scale"] = [25, 200];
+      limits[key + "Opacity"] = [0, 100];
+    }
     for (const [name, [min, max]] of Object.entries(limits)) {
       if (Number.isInteger(saved[name]) && saved[name] >= min && saved[name] <= max) {
         settings[name] = saved[name];
       }
+    }
+    if (Array.isArray(saved.stops)) {
+      const valid = saved.stops.filter(stop => stop && hexColor(stop.color) &&
+        [stop.position, stop.opacity].every(value => Number.isInteger(value) && value >= 0 && value <= 100));
+      if (valid.length >= 2) settings.stops = valid;
     }
   } catch (error) {
     console.warn("ShapePS could not read saved settings", error);
@@ -105,10 +124,13 @@ function refreshPreview(force = false) {
     return;
   }
 
-  const visibleSettings = picker ? { ...settings, [picker.name]: picker.hex } : { ...settings };
+  const visibleSettings = { ...settings, stops: settings.stops.map(stop => ({ ...stop, color: visibleStopColor(stop) })) };
+  if (picker && !picker.stop) visibleSettings[picker.name] = picker.hex;
   renderTimer = setTimeout(async () => {
     try {
-      const src = await host.previewImage(doc, visibleSettings, 280, 138);
+      const frame = get("preview-frame").getBoundingClientRect();
+      const src = await host.previewImage(doc, visibleSettings, clamp(Math.round(frame.width) - 2, 140, 720),
+        clamp(Math.round(frame.height) - 2, 120, 310));
       if (revision !== previewRevision) return;
       get("preview").src = src;
       setPreviewStatus("");
@@ -142,19 +164,168 @@ function syncControls() {
   setSegment("raster", settings.output === 1);
   setSegment("solid", settings.fill === 0);
   setSegment("gradient", settings.fill === 1);
+  setSegment("gradient-linear", settings.gradientType === 0);
+  setSegment("gradient-radial", settings.gradientType === 1);
   get("first-label").textContent = settings.fill ? "Start color" : "Fill color";
   get("second").hidden = settings.fill === 0;
-  get("angle-row").hidden = settings.fill === 0;
+  get("gradient-editor").hidden = settings.fill === 0;
+  get("angle-row").hidden = settings.fill === 0 || settings.gradientType === 1;
   get("line").disabled = settings.count === 0;
+  syncEffects();
   syncSwatches();
 }
 
+const visibleStopColor = stop => picker?.stop === stop ? picker.hex : stop.color;
+const orderedStops = () => [...settings.stops].sort((a, b) => a.position - b.position);
+
+function colorStop(name) {
+  if (!settings.fill) return null;
+  if (name === "stop") return selectedStop;
+  const stops = orderedStops();
+  return name === "first" ? stops[0] : name === "second" ? stops[stops.length - 1] : null;
+}
+
+function paintGradient() {
+  if (!settings.fill) return;
+  const stops = orderedStops();
+  const colors = stops.map(stop => `#${visibleStopColor(stop)}${Math.round(stop.opacity * 255 / 100).toString(16).padStart(2, "0")} ${stop.position}%`);
+  get("gradient-ramp").style.backgroundImage = `linear-gradient(to right, ${colors.join(", ")})`;
+  for (const [stop, button] of stopHandles) {
+    button.style.left = stop.position + "%";
+    button.style.backgroundColor = "#" + visibleStopColor(stop);
+    button.setAttribute("aria-pressed", String(stop === selectedStop));
+    button.setAttribute("aria-label", `Gradient stop ${stop.position}%`);
+  }
+  get("remove-stop").disabled = stops.length <= 2;
+  for (const [id, key] of [["stop-position", "position"], ["stop-opacity", "opacity"]]) {
+    get(id).value = String(selectedStop[key]);
+    get(id + "-value").textContent = selectedStop[key] + "%";
+  }
+}
+
+function saveStops() {
+  const stops = orderedStops();
+  settings.first = stops[0].color;
+  settings.second = stops[stops.length - 1].color;
+  rememberSettings();
+}
+
+function editStop(stop, key, value) {
+  stop[key] = value;
+  syncSwatches();
+  refreshPreview(true);
+}
+
+function buildStops() {
+  const shelf = get("gradient-stops");
+  shelf.textContent = "";
+  stopHandles.clear();
+  for (const stop of settings.stops) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "gradient-stop";
+    button.addEventListener("mousedown", event => {
+      if (event.button > 0) return;
+      if (picker?.stop && picker.stop !== stop && !finishColor(true)) return;
+      const rect = button.getBoundingClientRect();
+      const offset = event.clientX - rect.left - rect.width / 2;
+      const move = point => {
+        if (point.buttons === 0) return release();
+        const bounds = shelf.getBoundingClientRect();
+        if (!bounds.width) return;
+        selectedStop = stop;
+        editStop(stop, "position", clamp(Math.round(100 * (point.clientX - offset - bounds.left) / bounds.width), 0, 100));
+      };
+      const release = () => {
+        document.removeEventListener("mousemove", move);
+        document.removeEventListener("mouseup", release);
+        saveStops();
+      };
+      document.addEventListener("mousemove", move);
+      document.addEventListener("mouseup", release);
+    });
+    button.addEventListener("click", () => {
+      if (picker?.stop && picker.stop !== stop && !finishColor(true)) return;
+      selectedStop = stop;
+      syncSwatches();
+    });
+    stopHandles.set(stop, button);
+    shelf.appendChild(button);
+  }
+  syncSwatches();
+}
+
+function addStop() {
+  if (!finishColor(true)) return;
+  const stops = orderedStops();
+  const range = [{ ...stops[0], position: 0 }, ...stops, { ...stops[stops.length - 1], position: 100 }];
+  let largest = 1;
+  for (let i = 2; i < range.length; i++) {
+    if (range[i].position - range[i - 1].position > range[largest].position - range[largest - 1].position) largest = i;
+  }
+  const left = range[largest - 1], right = range[largest];
+  const hex = left.color.match(/../g).map((pair, i) =>
+    Math.round((parseInt(pair, 16) + parseInt(right.color.slice(i * 2, i * 2 + 2), 16)) / 2).toString(16).padStart(2, "0")
+  ).join("").toUpperCase();
+  selectedStop = { position: Math.round((left.position + right.position) / 2),
+    opacity: Math.round((left.opacity + right.opacity) / 2), color: hex };
+  settings.stops.push(selectedStop);
+  saveStops();
+  buildStops();
+  refreshPreview(true);
+}
+
 function syncSwatches() {
-  for (const name of colorNames) {
+  for (const name of colorControls) {
     const active = picker?.name === name;
-    const value = active ? picker.hex : settings[name];
-    get(name + "-chip").style.backgroundColor = "#" + value;
+    const stop = colorStop(name);
+    const value = active ? picker.hex : stop ? visibleStopColor(stop) : settings[name];
+    if (value) get(name + "-chip").style.backgroundColor = "#" + value;
     get(name).setAttribute("aria-expanded", String(active));
+  }
+  paintGradient();
+}
+
+function syncEffects() {
+  for (const [key] of effects) {
+    setSegment(key, settings[key] === 1);
+    get(key + "-options").hidden = settings[key] === 0;
+    for (const suffix of ["Scale", "Opacity"]) {
+      const field = key + suffix;
+      get(field).value = String(settings[field]);
+      get(field + "-value").textContent = settings[field] + "%";
+    }
+  }
+}
+
+function initializeEffects() {
+  for (const [key, name] of effects) {
+    const group = document.createElement("div");
+    group.className = "effect";
+    group.innerHTML = `<button id="${key}" type="button" class="segment" aria-controls="${key}-options">${name}</button>
+      <div id="${key}-options" class="effect-options" hidden>
+        ${["Scale", "Opacity"].map(field => `<div class="range-row">
+          <div class="range-label"><label for="${key + field}">${field}</label><output id="${key + field}-value"></output></div>
+          <input id="${key + field}" aria-label="${name} ${field.toLowerCase()}" type="range" min="${field === "Scale" ? 25 : 0}" max="${field === "Scale" ? 200 : 100}">
+        </div>`).join("")}
+      </div>`;
+    get("effect-controls").appendChild(group);
+    get(key).addEventListener("click", () => {
+      settings[key] = 1 - settings[key];
+      syncEffects();
+      rememberSettings();
+      refreshPreview(true);
+    });
+    for (const field of [key + "Scale", key + "Opacity"]) {
+      const change = () => {
+        settings[field] = Number(get(field).value);
+        syncEffects();
+        rememberSettings();
+        refreshPreview(true);
+      };
+      get(field).addEventListener("input", change);
+      get(field).addEventListener("change", change);
+    }
   }
 }
 
@@ -341,8 +512,10 @@ function beginColor(name) {
   const wasOpen = picker?.name === name;
   finishColor(false);
   if (wasOpen) return;
-  const hex = settings[name];
-  picker = { name, hex, ...hexToHsv(hex) };
+  const stop = colorStop(name);
+  if (stop) selectedStop = stop;
+  const hex = stop ? stop.color : settings[name];
+  picker = { name, stop, hex, ...hexToHsv(hex) };
   get(name === "line" ? "line-picker" : "fill-picker").appendChild(get("picker"));
   get("picker").hidden = false;
   showPickerSwatches(swatchesOpen);
@@ -361,8 +534,14 @@ function finishColor(apply, restoreFocus = false) {
       get("hex").focus();
       return false;
     }
-    settings[name] = hex.toUpperCase();
-    rememberSettings();
+    if (picker.stop || name === "first") {
+      const stop = picker.stop || orderedStops()[0];
+      stop.color = hex.toUpperCase();
+      saveStops();
+    } else {
+      settings[name] = hex.toUpperCase();
+      rememberSettings();
+    }
   }
   picker = null;
   get("picker").hidden = true;
@@ -391,13 +570,14 @@ async function generateShape() {
     get("seed").focus();
     return;
   }
-  const requested = { ...settings };
+  const requested = { ...settings, stops: settings.stops.map(stop => ({ ...stop })) };
   generating = true;
   get("generate").disabled = true;
   showStatus("Generating…");
   try {
     await host.generate(requested);
-    showStatus(requested.output ? "Raster layer added." : "Vector shape added.");
+    const hasEffects = effects.some(([key]) => requested[key]);
+    showStatus(requested.output ? (hasEffects ? "Raster group added." : "Raster layer added.") : "Vector shape added.");
   } catch (error) {
     showStatus(error.message || String(error));
   } finally {
@@ -447,15 +627,21 @@ function initialize() {
   initialized = true;
   restoreSettings();
   restorePalette();
+  settings.stops ||= [{ position: 0, opacity: 100, color: settings.first },
+    { position: 100, opacity: 100, color: settings.second }];
+  selectedStop = orderedStops()[0];
+  initializeEffects();
+  buildStops();
   get("preset").innerHTML = shapes.map((name, i) => '<option value="' + i + '">' + name + '</option>').join("");
   syncControls();
 
   for (const [id, key, value] of [
     ["solid", "fill", 0], ["gradient", "fill", 1], ["vector", "output", 0], ["raster", "output", 1],
-    ["shape-basic", "variation", 0], ["shape-variation", "variation", 1]
+    ["shape-basic", "variation", 0], ["shape-variation", "variation", 1],
+    ["gradient-linear", "gradientType", 0], ["gradient-radial", "gradientType", 1]
   ]) {
     get(id).addEventListener("click", () => {
-      if (id === "solid" && picker?.name === "second") finishColor(false);
+      if (key === "fill" && !finishColor(true)) return;
       settings[key] = value;
       syncControls();
       rememberSettings();
@@ -499,7 +685,36 @@ function initialize() {
   get("seed").addEventListener("input", seedChanged);
   get("seed").addEventListener("change", seedChanged);
 
-  for (const name of colorNames) get(name).addEventListener("click", () => beginColor(name));
+  get("add-stop").addEventListener("click", addStop);
+  get("remove-stop").addEventListener("click", () => {
+    if (settings.stops.length <= 2 || !finishColor(true)) return;
+    const ordered = orderedStops();
+    const index = ordered.indexOf(selectedStop);
+    settings.stops = settings.stops.filter(stop => stop !== selectedStop);
+    selectedStop = ordered[index + 1] || ordered[index - 1];
+    saveStops();
+    buildStops();
+    refreshPreview(true);
+    stopHandles.get(selectedStop).focus();
+  });
+  get("reverse-gradient").addEventListener("click", () => {
+    if (!finishColor(true)) return;
+    for (const stop of settings.stops) stop.position = 100 - stop.position;
+    settings.stops.reverse();
+    saveStops();
+    buildStops();
+    refreshPreview(true);
+  });
+  for (const [id, key] of [["stop-position", "position"], ["stop-opacity", "opacity"]]) {
+    const change = () => {
+      editStop(selectedStop, key, Number(get(id).value));
+      saveStops();
+    };
+    get(id).addEventListener("input", change);
+    get(id).addEventListener("change", change);
+  }
+
+  for (const name of colorControls) get(name).addEventListener("click", () => beginColor(name));
   get("photoshop-swatches").hidden = !host.photoshopSwatches;
   get("picker-color-tab").addEventListener("click", () => showPickerSwatches(false));
   get("picker-swatches-tab").addEventListener("click", () => showPickerSwatches(true));
@@ -575,6 +790,7 @@ function initialize() {
   });
 
   host.onDocumentChange(() => refreshPreview());
+  if (typeof window !== "undefined") window.addEventListener("resize", () => refreshPreview(true));
   refreshPreview(true);
 }
 

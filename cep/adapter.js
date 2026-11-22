@@ -76,8 +76,28 @@ module.exports = function createCepHost(browser, extensionRoot) {
     const doc = await readDocument();
     if (!doc) throw new Error("Open a single-canvas RGB document.");
     const scene = engine.legacyScene(doc, settings);
-    const result = await evalScript("ShapePS_generate(" + JSON.stringify(scene) + ")");
-    if (result !== "ok") throw new Error(result || "Photoshop could not create the shape.");
+    const generateLayers = async () => {
+      const result = await evalScript("ShapePS_generate(" + scriptString(scene) + ")");
+      if (result !== "ok") throw new Error(result || "Photoshop could not create the shape.");
+    };
+    if (!scene.effects.length) return generateLayers();
+
+    const folder = await fs.promises.mkdtemp(path.join(os.tmpdir(), "shapeps-effects-"));
+    try {
+      for (const effect of scene.effects) {
+        const { pixels, width, height } = engine.effectPixels(effect);
+        const canvas = rgbCanvas(pixels, width, height);
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+        canvas.width = canvas.height = 1;
+        if (!blob) throw new Error("Could not render " + effect.name + ".");
+        effect.file = path.join(folder, effect.key + ".png");
+        await fs.promises.writeFile(effect.file, Buffer.from(await blob.arrayBuffer()));
+      }
+      await generateLayers();
+    } finally {
+      await fs.promises.rm(folder, { recursive: true, force: true }).catch(error =>
+        console.warn("ShapePS could not remove its temporary effect files", error));
+    }
   }
 
   async function foregroundColor() {
@@ -113,9 +133,7 @@ module.exports = function createCepHost(browser, extensionRoot) {
     return { name: path.basename(filename), colors: await readSwatches(await fs.promises.readFile(filename), convertColors) };
   }
 
-  async function previewImage(doc, settings, viewWidth, viewHeight) {
-    const width = viewWidth * 2, height = viewHeight * 2;
-    const pixels = engine.previewPixels(doc, settings, width, height);
+  function rgbCanvas(pixels, width, height) {
     const canvas = browser.document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
@@ -128,7 +146,12 @@ module.exports = function createCepHost(browser, extensionRoot) {
       image.data[dest + 3] = 255;
     }
     context.putImageData(image, 0, 0);
-    return canvas.toDataURL("image/png");
+    return canvas;
+  }
+
+  async function previewImage(doc, settings, viewWidth, viewHeight) {
+    const width = viewWidth * 2, height = viewHeight * 2;
+    return rgbCanvas(engine.previewPixels(doc, settings, width, height), width, height).toDataURL("image/png");
   }
 
   function runGit(...args) {
