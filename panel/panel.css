@@ -118,14 +118,31 @@ input[type="range"] { width: 100%; height: 20px; margin: 2px 0 0; accent-color: 
 }
 .swatch-chip[aria-pressed="true"] { outline: 2px solid var(--text); outline-offset: 1px; }
 #use-foreground { margin-top: 3px; }
-.color-plane { height: 100px; width: 100%; position: relative; border-radius: var(--radius); }
+.hue-row { margin: 9px 0 10px; }
+#hue {
+  --thumb-width: 14px;
+  -webkit-appearance: none;
+  display: block; height: 18px; margin: 5px 0 0; border-radius: var(--radius);
+  background: linear-gradient(to right, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000)
+    center / calc(100% - var(--thumb-width)) 100% no-repeat #ff0000;
+  cursor: ew-resize;
+}
+#hue::-webkit-slider-runnable-track { height: 18px; background: transparent; }
+#hue::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: var(--thumb-width); height: 22px; margin-top: -2px;
+  border: 2px solid #ffffff; border-radius: var(--radius);
+  background: transparent; box-shadow: 0 0 0 1px var(--surface);
+}
+.color-plane { height: 120px; width: 100%; position: relative; border-radius: var(--radius); cursor: crosshair; }
 .color-white, .color-black, .color-marker { position: absolute; }
 .color-white, .color-black { top: 0; left: 0; width: 100%; height: 100%; border-radius: inherit; }
 .color-white { background: linear-gradient(to right, #ffffff, rgba(255,255,255,0)); }
 .color-black { background: linear-gradient(to top, #000000, rgba(0,0,0,0)); }
 .color-marker {
-  width: 10px; height: 10px; border: 2px solid white; border-radius: 5px;
-  background: var(--surface); margin: -5px 0 0 -5px;
+  width: 12px; height: 12px; margin: -6px 0 0 -6px;
+  border: 2px solid #ffffff; border-radius: 50%; box-shadow: 0 0 0 1px var(--surface);
+  pointer-events: none;
 }
 .picker-actions { margin-top: 5px; }
 #picker-swatches:not([hidden]) + .picker-actions {

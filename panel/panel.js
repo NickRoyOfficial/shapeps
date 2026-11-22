@@ -316,10 +316,13 @@ async function useForeground() {
 function paintPicker(updateHexField) {
   const { hex, hue, saturation, value } = picker;
   get("hue").value = String(hue);
+  get("hue").setAttribute("aria-valuetext", hue + " degrees");
   get("hue-value").textContent = hue + "°";
   get("color-plane").style.backgroundColor = "#" + hsvToHex(hue, 1, 1);
-  get("color-marker").style.left = saturation * 100 + "%";
-  get("color-marker").style.top = (1 - value) * 100 + "%";
+  const marker = get("color-marker");
+  marker.style.left = saturation * 100 + "%";
+  marker.style.top = (1 - value) * 100 + "%";
+  marker.style.backgroundColor = "#" + hex;
   if (updateHexField) get("hex").value = "#" + hex;
   get("color-error").hidden = true;
   get("hex").setAttribute("aria-invalid", "false");
@@ -509,9 +512,15 @@ function initialize() {
   get("use-foreground").addEventListener("click", useForeground);
   get("dismiss-color").addEventListener("click", () => finishColor(false, true));
   get("apply-color").addEventListener("click", () => finishColor(true, true));
-  const changeHue = () => { if (picker) updatePicker({ hue: Number(get("hue").value) }); };
-  get("hue").addEventListener("input", changeHue);
-  get("hue").addEventListener("change", changeHue);
+  const hueControl = get("hue");
+  const changeHue = () => {
+    if (!picker) return;
+    const hue = Number(hueControl.value);
+    if (hue === picker.hue && picker.saturation && picker.value) return;
+    // Give an achromatic starting color visible color as soon as a hue is chosen.
+    updatePicker({ hue, saturation: picker.saturation || 1, value: picker.value || 1 });
+  };
+  for (const event of ["input", "change", "click"]) hueControl.addEventListener(event, changeHue);
   get("hex").addEventListener("input", () => {
     const hex = get("hex").value.trim().replace(/^#/, "");
     if (!picker || !hexColor(hex)) return;
@@ -522,10 +531,16 @@ function initialize() {
   const plane = get("color-plane");
   let dragging = false;
   plane.addEventListener("mousedown", event => {
+    if (event.button > 0) return;
+    event.preventDefault();
+    plane.focus({ preventScroll: true });
     dragging = true;
     pickAtPointer(event);
   });
-  plane.addEventListener("mousemove", event => { if (dragging) pickAtPointer(event); });
+  document.addEventListener("mousemove", event => {
+    if (event.buttons === 0) dragging = false;
+    if (dragging) pickAtPointer(event);
+  });
   document.addEventListener("mouseup", () => { dragging = false; });
   plane.addEventListener("keydown", event => {
     const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowDown: [0, -1], ArrowUp: [0, 1] }[event.key];
