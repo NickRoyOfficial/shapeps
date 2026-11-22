@@ -10,32 +10,55 @@ const enumeration = (type, value) => ({ _enum: type, _value: value });
 const unit = (name, value) => ({ _unit: name, _value: value });
 const layerRef = id => ({ _ref: "layer", _id: id });
 
-function outline(shape, seed) {
-  const count = [16, 16, 16, 4, 4, 3, 4, 5, 6, 10][shape];
-  const smooth = shape < 3;
-  const diagonal = shape === 3 || shape === 4;
-  const start = diagonal ? -Math.PI / 4 : -Math.PI / 2;
+function blobOutline(seed) {
+  const count = 16;
   const phase = [2, 3, 5].map(n => {
     const x = Math.sin((seed + n * 137) * 12.9898) * 43758.5453;
     return 2 * Math.PI * (x - Math.floor(x));
   });
   const points = Array.from({ length: count }, (_, i) => {
-    const angle = start + i * 2 * Math.PI / count;
-    let radius = shape === 9 && i % 2 ? 0.46 : 1;
-    if (shape === 0) {
-      radius += 0.20 * Math.sin(2 * angle + phase[0])
-        + 0.16 * Math.sin(3 * angle + phase[1])
-        + 0.06 * Math.sin(5 * angle + phase[2]);
-    }
-    const aspect = shape === 2 || shape === 4 ? 0.63 : 1;
-    return [radius * Math.cos(angle), aspect * radius * Math.sin(angle)];
+    const angle = -Math.PI / 2 + i * 2 * Math.PI / count;
+    const radius = 1 + 0.20 * Math.sin(2 * angle + phase[0])
+      + 0.16 * Math.sin(3 * angle + phase[1]) + 0.025 * Math.sin(5 * angle + phase[2]);
+    return [radius * Math.cos(angle), radius * Math.sin(angle)];
   });
-  return points.map(([x, y], i) => {
+  // Convert the closed uniform cubic B-spline to editable Bézier segments.
+  // Both the first and second derivatives agree where the segments meet.
+  return points.map((point, i) => {
     const prev = points[(i + count - 1) % count];
     const next = points[(i + 1) % count];
-    const dx = smooth ? (next[0] - prev[0]) / 6 : 0;
-    const dy = smooth ? (next[1] - prev[1]) / 6 : 0;
-    return { anchor: [x, y], incoming: [x - dx, y - dy], outgoing: [x + dx, y + dy], smooth };
+    return {
+      anchor: point.map((value, axis) => (prev[axis] + 4 * value + next[axis]) / 6),
+      incoming: point.map((value, axis) => (prev[axis] + 2 * value) / 3),
+      outgoing: point.map((value, axis) => (2 * value + next[axis]) / 3),
+      smooth: true
+    };
+  });
+}
+
+function ellipseOutline(aspect) {
+  const arc = Math.PI / 4;
+  const handle = 4 / 3 * Math.tan(arc / 4);
+  return Array.from({ length: 8 }, (_, i) => {
+    const angle = -Math.PI / 2 + i * arc;
+    const x = Math.cos(angle), y = Math.sin(angle) * aspect;
+    const dx = -Math.sin(angle) * handle, dy = Math.cos(angle) * handle * aspect;
+    return { anchor: [x, y], incoming: [x - dx, y - dy], outgoing: [x + dx, y + dy], smooth: true };
+  });
+}
+
+function outline(shape, seed) {
+  if (shape === 0) return blobOutline(seed);
+  if (shape === 1 || shape === 2) return ellipseOutline(shape === 2 ? 0.63 : 1);
+
+  const count = [4, 4, 3, 4, 5, 6, 10][shape - 3];
+  const start = shape === 3 || shape === 4 ? -Math.PI / 4 : -Math.PI / 2;
+  const aspect = shape === 4 ? 0.63 : 1;
+  return Array.from({ length: count }, (_, i) => {
+    const angle = start + i * 2 * Math.PI / count;
+    const radius = shape === 9 && i % 2 ? 0.46 : 1;
+    const anchor = [radius * Math.cos(angle), aspect * radius * Math.sin(angle)];
+    return { anchor, incoming: anchor, outgoing: anchor, smooth: false };
   });
 }
 
@@ -232,8 +255,8 @@ function sampleOutline(points) {
   return points.flatMap((point, i) => {
     if (!point.smooth) return [point.anchor];
     const next = points[(i + 1) % points.length];
-    return Array.from({ length: 12 }, (_, step) => {
-      const t = step / 12, s = 1 - t;
+    return Array.from({ length: 16 }, (_, step) => {
+      const t = step / 16, s = 1 - t;
       return point.anchor.map((start, axis) =>
         s ** 3 * start + 3 * s ** 2 * t * point.outgoing[axis]
         + 3 * s * t ** 2 * next.incoming[axis] + t ** 3 * next.anchor[axis]
@@ -263,6 +286,11 @@ function paintMask(mask, width, height, polygon, value) {
   }
 }
 
+function pixelCoverage(mask, topLeft, stride) {
+  const bottomLeft = topLeft + stride;
+  return (mask[topLeft] + mask[topLeft + 1] + mask[bottomLeft] + mask[bottomLeft + 1]) / 4;
+}
+
 const previewWidth = 152;
 const previewHeight = 132;
 
@@ -274,15 +302,17 @@ function previewPixels(doc, settings, width, height) {
   const top = (height - frameHeight) / 2;
   const geometry = fittedOutline(outline(settings.shape, settings.seed), frameWidth, frameHeight, settings.size);
   const samples = sampleOutline(geometry.points);
+  // Rasterize the masks at 2× so thin contour bands and curved edges can share a pixel.
+  const maskWidth = width * 2, maskHeight = height * 2;
   const contour = ratio => samples.map(([x, y]) => [
-    left + geometry.x + x * geometry.scale * ratio, top + geometry.y + y * geometry.scale * ratio
+    2 * (left + geometry.x + x * geometry.scale * ratio), 2 * (top + geometry.y + y * geometry.scale * ratio)
   ]);
-  const fill = new Uint8Array(width * height);
-  const lines = new Uint8Array(width * height);
-  paintMask(fill, width, height, contour(1), 1);
+  const fill = new Uint8Array(maskWidth * maskHeight);
+  const lines = new Uint8Array(maskWidth * maskHeight);
+  paintMask(fill, maskWidth, maskHeight, contour(1), 1);
   for (const [outer, inner] of contourIntervals(settings.count)) {
-    paintMask(lines, width, height, contour(outer), 1);
-    paintMask(lines, width, height, contour(inner), 0);
+    paintMask(lines, maskWidth, maskHeight, contour(outer), 1);
+    paintMask(lines, maskWidth, maskHeight, contour(inner), 0);
   }
 
   const pixels = new Uint8Array(width * height * 3);
@@ -302,10 +332,13 @@ function previewPixels(doc, settings, width, height) {
       const backdrop = onArtboard ? (gridLine ? grid : artboard) : background;
       const position = 0.5 + ((x - width / 2) * dx + (y - height / 2) * dy) / gradientSpan;
       const mix = Math.max(0, Math.min(1, position));
+      const sample = 2 * (y * maskWidth + x);
+      const fillCoverage = pixelCoverage(fill, sample, maskWidth);
+      const lineCoverage = pixelCoverage(lines, sample, maskWidth);
       for (let channel = 0; channel < 3; channel++) {
-        pixels[index * 3 + channel] = lines[index] ? line[channel]
-          : fill[index] ? Math.round(start[channel] + mix * (end[channel] - start[channel]))
-          : backdrop[channel];
+        const shade = start[channel] + mix * (end[channel] - start[channel]);
+        pixels[index * 3 + channel] = Math.round(backdrop[channel] * (1 - fillCoverage)
+          + shade * (fillCoverage - lineCoverage) + line[channel] * lineCoverage);
       }
     }
   }
