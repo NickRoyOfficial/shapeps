@@ -16,7 +16,7 @@ def sync_script():
     front, body = text.split(START, 1)
     _, wrapper = body.split(END, 1)
     module = (PANEL / "engine.js").read_text(encoding="utf-8")
-    source, _ = module.rsplit("\nmodule.exports = ", 1)
+    source, _ = module.split("\nfunction legacyScene(", 1)
     script.write_text(front + START + source.rstrip() + "\n" + END + wrapper, encoding="utf-8")
 
 
@@ -24,7 +24,7 @@ def package(destination):
     if destination.suffix.lower() != ".ccx":
         raise ValueError("Use a .ccx destination.")
     manifest = json.loads((PANEL / "manifest.json").read_text(encoding="utf-8"))
-    filenames = ["manifest.json", manifest["main"], "panel.css", "panel.js", "engine.js", "updates.js"]
+    filenames = ["manifest.json", manifest["main"], "panel.css", "panel.js", "engine.js", "uxp-host.js", "updates.js"]
     for entry in manifest["entrypoints"]:
         filenames.extend(icon["path"] for icon in entry.get("icons", []))
     destination.parent.mkdir(parents=True, exist_ok=True)

@@ -1,7 +1,13 @@
-const { app, action, constants, core } = require("photoshop");
-const { entrypoints } = require("uxp");
-const { shapes, generate, previewImage } = require("./engine.js");
-const { checkForUpdate, installUpdate, openReleases } = require("./updates.js");
+function loadHost() {
+  if (typeof window !== "undefined" && window.__adobe_cep__) {
+    const location = decodeURI(window.__adobe_cep__.getSystemPath("extension")).replace(/^file:\/\/\//, "");
+    return window.cep_node.require(location + "/cep/adapter.js")(window, location);
+  }
+  return require("./uxp-host.js");
+}
+
+const host = loadHost();
+const { shapes } = host;
 
 const defaults = {
   shape: 0, seed: 38, size: 60, output: 0, fill: 0,
@@ -56,11 +62,6 @@ function showStatus(message = "") {
   status.hidden = !message;
 }
 
-function currentDocument() {
-  const doc = app.documents.length ? app.activeDocument : null;
-  return doc?.mode === constants.DocumentMode.RGB && !doc.artboards.length ? doc : null;
-}
-
 function setPreviewStatus(message) {
   const status = get("preview-status");
   status.textContent = message;
@@ -69,7 +70,7 @@ function setPreviewStatus(message) {
 }
 
 function refreshPreview(force = false) {
-  const doc = currentDocument();
+  const doc = host.currentDocument();
   const key = doc ? [doc.id, doc.width, doc.height].join("/") : "";
   if (!force && key === documentKey) return;
   documentKey = key;
@@ -84,7 +85,7 @@ function refreshPreview(force = false) {
   const visibleSettings = picker ? { ...settings, [picker.name]: picker.hex } : { ...settings };
   renderTimer = setTimeout(async () => {
     try {
-      const src = await previewImage(doc, visibleSettings, 280, 138);
+      const src = await host.previewImage(doc, visibleSettings, 280, 138);
       if (revision !== previewRevision) return;
       get("preview").src = src;
       setPreviewStatus("");
@@ -230,17 +231,13 @@ async function generateShape() {
   get("generate").disabled = true;
   showStatus("Generating…");
   try {
-    await core.executeAsModal(async context => {
-      const doc = currentDocument();
-      if (!doc) throw new Error("Open a single-canvas RGB document.");
-      await generate(doc, requested, context.hostControl);
-    }, { commandName: "Generate ShapePS shape" });
+    await host.generate(requested);
     showStatus(requested.output ? "Raster layer added." : "Vector shape added.");
   } catch (error) {
     showStatus(error.message || String(error));
   } finally {
     generating = false;
-    get("generate").disabled = !currentDocument();
+    get("generate").disabled = !host.currentDocument();
   }
 }
 
@@ -250,13 +247,20 @@ async function handleUpdate() {
   get("releases").hidden = true;
   button.disabled = true;
   try {
+    if (host.pullUpdate) {
+      status.textContent = "Pulling changes from GitHub…";
+      const changed = await host.pullUpdate();
+      status.textContent = changed ? "Reloading ShapePS…" : "Panel reloaded. Git is up to date.";
+      host.reload();
+      return;
+    }
     if (update) {
       status.textContent = "Downloading " + update.tag + "…";
-      await installUpdate(update);
+      await host.installUpdate(update);
       status.textContent = "Confirm the update in Adobe’s installer.";
     } else {
       status.textContent = "Checking GitHub…";
-      const { version, available, published } = await checkForUpdate();
+      const { version, available, published } = await host.checkForUpdate();
       update = available;
       if (available) {
         button.textContent = "Install " + available.tag;
@@ -267,7 +271,7 @@ async function handleUpdate() {
     }
   } catch (error) {
     status.textContent = "Update unavailable. " + error.message;
-    get("releases").hidden = false;
+    get("releases").hidden = !(host.openReleases || host.reload);
   } finally {
     button.disabled = false;
   }
@@ -366,25 +370,25 @@ function initialize() {
   });
 
   get("generate").addEventListener("click", generateShape);
+  if (host.pullUpdate) {
+    get("update").textContent = "Pull & reload";
+    get("releases").textContent = "Reload panel";
+  }
   get("update").addEventListener("click", handleUpdate);
   get("releases").addEventListener("click", async () => {
-    try { await openReleases(); }
+    if (host.reload) {
+      host.reload();
+      return;
+    }
+    try { await host.openReleases(); }
     catch (error) { get("update-status").textContent = error.message; }
   });
 
-  Promise.resolve(action.addNotificationListener(
-    ["open", "close", "select", "make", "imageSize", "canvasSize", "convertMode"], () => refreshPreview()
-  )).catch(error => console.warn("ShapePS document notifications", error));
+  host.onDocumentChange(() => refreshPreview());
   refreshPreview(true);
 }
 
-entrypoints.setup({
-  panels: {
-    shapeps: {
-      show() {
-        initialize();
-        refreshPreview(true);
-      }
-    }
-  }
+host.onShow(() => {
+  initialize();
+  refreshPreview(true);
 });

@@ -1,4 +1,3 @@
-const { app, action, constants, imaging } = require("photoshop");
 const shapes = ["Organic blob", "Circle", "Oval", "Square", "Rectangle",
   "Triangle", "Diamond", "Pentagon", "Hexagon", "Star"];
 
@@ -49,20 +48,28 @@ function fittedOutline(points, width, height, size) {
   };
 }
 
-function subpath(geometry, ratio = 1, subtract = false) {
+function positionedPoints(geometry, ratio) {
   const { points, scale, x, y } = geometry;
   const position = ([px, py]) => [x + px * ratio * scale, y + py * ratio * scale];
+  return points.map(point => ({
+    anchor: position(point.anchor), incoming: position(point.incoming),
+    outgoing: position(point.outgoing), smooth: point.smooth
+  }));
+}
+
+function subpath(geometry, ratio = 1, subtract = false) {
+  const { app, constants } = require("photoshop");
   const path = new app.SubPathInfo();
   path.closed = true;
   path.operation = subtract ? constants.ShapeOperation.SHAPESUBTRACT
     : constants.ShapeOperation.SHAPEADD;
-  path.entireSubPath = points.map(p => {
+  path.entireSubPath = positionedPoints(geometry, ratio).map(p => {
     const point = new app.PathPointInfo();
     point.kind = p.smooth ? constants.PointKind.SMOOTHPOINT : constants.PointKind.CORNERPOINT;
-    point.anchor = position(p.anchor);
+    point.anchor = p.anchor;
     // Photoshop's leftDirection leaves this knot. rightDirection enters it.
-    point.leftDirection = position(p.outgoing);
-    point.rightDirection = position(p.incoming);
+    point.leftDirection = p.outgoing;
+    point.rightDirection = p.incoming;
     return point;
   });
   return path;
@@ -120,6 +127,7 @@ function fillOptions(settings, geometry, doc) {
 }
 
 async function play(descriptor) {
+  const { action } = require("photoshop");
   const [result] = await action.batchPlay([{ ...descriptor,
     _options: { dialogOptions: "dontDisplay" } }], {});
   if (result?._obj === "error") throw new Error(result.message || descriptor._obj);
@@ -167,6 +175,7 @@ async function selectLayer(id, add = false) {
 }
 
 async function generate(doc, settings, history) {
+  const { constants } = require("photoshop");
   const suspension = await history.suspendHistory({ documentID: doc.id, name: "Generate Shape Studio shape" });
   try {
     let selectionChannel;
@@ -299,6 +308,7 @@ function previewPixels(doc, settings, width, height) {
 }
 
 async function previewImage(doc, settings, viewWidth = previewWidth, viewHeight = previewHeight) {
+  const { imaging } = require("photoshop");
   const width = viewWidth * 2, height = viewHeight * 2;
   const imageData = await imaging.createImageDataFromBuffer(previewPixels(doc, settings, width, height), {
     width, height, components: 3, colorSpace: "RGB", colorProfile: "sRGB IEC61966-2.1"
@@ -311,4 +321,23 @@ async function previewImage(doc, settings, viewWidth = previewWidth, viewHeight 
   }
 }
 
-module.exports = { shapes, generate, previewImage };
+function legacyScene(doc, settings) {
+  const shape = fittedOutline(outline(settings.shape, settings.seed), doc.width, doc.height, settings.size);
+  const name = shapes[settings.shape];
+  const layers = [{
+    name, fill: fillOptions(settings, shape, doc),
+    paths: [{ points: positionedPoints(shape, 1), subtract: false }]
+  }];
+  if (settings.count) {
+    layers.push({
+      name: "Topo lines", fill: { _obj: "solidColorLayer", color: color(settings.line) },
+      paths: contourIntervals(settings.count).flatMap(([outer, inner]) => [
+        { points: positionedPoints(shape, outer), subtract: false },
+        { points: positionedPoints(shape, inner), subtract: true }
+      ])
+    });
+  }
+  return { id: doc.id, width: doc.width, height: doc.height, name, output: settings.output, layers };
+}
+
+module.exports = { shapes, generate, previewImage, previewPixels, legacyScene };
