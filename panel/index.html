@@ -37,13 +37,21 @@
         </div>
         <button id="random" type="button" class="secondary">Randomize</button>
       </div>
-      <div id="seed-row" class="seed-row">
-        <label for="seed">Blob seed</label>
-        <input id="seed" type="text" inputmode="numeric" maxlength="6" value="38">
+      <div id="shape-mode" class="segments shape-mode" role="group" aria-label="Shape style" hidden>
+        <button id="shape-basic" type="button" class="segment selected" aria-pressed="true">Basic</button>
+        <button id="shape-variation" type="button" class="segment" aria-pressed="false">Variation</button>
       </div>
       <div class="range-row">
         <div class="range-label"><label for="size">Size</label><output id="size-value">60%</output></div>
         <input id="size" type="range" min="2" max="96" value="60">
+      </div>
+      <div id="complexity-row" class="range-row">
+        <div class="range-label"><label for="complexity">Complexity</label><output id="complexity-value">35%</output></div>
+        <input id="complexity" type="range" min="0" max="100" value="35">
+      </div>
+      <div id="seed-row" class="seed-row">
+        <label for="seed">Seed</label>
+        <input id="seed" type="text" inputmode="numeric" maxlength="6" value="38">
       </div>
     </section>
 

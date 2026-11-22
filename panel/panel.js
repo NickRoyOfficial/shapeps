@@ -10,7 +10,7 @@ const host = loadHost();
 const { shapes } = host;
 
 const defaults = {
-  shape: 0, seed: 38, size: 60, output: 0, fill: 0,
+  shape: 0, seed: 38, size: 60, complexity: 35, variation: 0, output: 0, fill: 0,
   first: "5128C8", second: "FF9C57", angle: 45, count: 7, line: "FFF3E5"
 };
 const colorNames = ["first", "second", "line"];
@@ -20,6 +20,7 @@ const hexColor = value => /^[0-9a-f]{6}$/i.test(value);
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
 let settings = { ...defaults };
+const usesSeed = () => settings.shape === 0 || settings.variation === 1;
 let picker = null;
 let renderTimer, previewRevision = 0;
 let documentKey;
@@ -36,6 +37,7 @@ function restoreSettings() {
     }
     const limits = {
       shape: [0, shapes.length - 1], seed: [0, 999999], size: [2, 96],
+      complexity: [0, 100], variation: [0, 1],
       output: [0, 1], fill: [0, 1], angle: [-180, 180], count: [0, 18]
     };
     for (const [name, [min, max]] of Object.entries(limits)) {
@@ -104,12 +106,17 @@ function setSegment(id, selected) {
 
 function syncControls() {
   get("preset").value = String(settings.shape);
-  get("seed-row").hidden = settings.shape !== 0;
-  for (const field of ["seed", "size", "count", "angle"]) get(field).value = String(settings[field]);
+  get("shape-mode").hidden = settings.shape === 0;
+  get("seed-row").hidden = !usesSeed();
+  get("complexity-row").hidden = !usesSeed();
+  for (const field of ["seed", "size", "complexity", "count", "angle"]) get(field).value = String(settings[field]);
   get("size-value").textContent = settings.size + "%";
+  get("complexity-value").textContent = settings.complexity + "%";
   get("count-value").textContent = String(settings.count);
   get("angle-value").textContent = settings.angle + "°";
 
+  setSegment("shape-basic", settings.variation === 0);
+  setSegment("shape-variation", settings.variation === 1);
   setSegment("vector", settings.output === 0);
   setSegment("raster", settings.output === 1);
   setSegment("solid", settings.fill === 0);
@@ -221,8 +228,8 @@ function pickAtPointer(event) {
 async function generateShape() {
   if (generating) return;
   if (!finishColor(true)) return;
-  if (settings.shape === 0 && !/^\d{1,6}$/.test(get("seed").value.trim())) {
-    showStatus("Enter a blob seed from 0 to 999999.");
+  if (usesSeed() && !/^\d{1,6}$/.test(get("seed").value.trim())) {
+    showStatus("Enter a seed from 0 to 999999.");
     get("seed").focus();
     return;
   }
@@ -285,7 +292,8 @@ function initialize() {
   syncControls();
 
   for (const [id, key, value] of [
-    ["solid", "fill", 0], ["gradient", "fill", 1], ["vector", "output", 0], ["raster", "output", 1]
+    ["solid", "fill", 0], ["gradient", "fill", 1], ["vector", "output", 0], ["raster", "output", 1],
+    ["shape-basic", "variation", 0], ["shape-variation", "variation", 1]
   ]) {
     get(id).addEventListener("click", () => {
       if (id === "solid" && picker?.name === "second") finishColor(false);
@@ -298,18 +306,19 @@ function initialize() {
 
   get("preset").addEventListener("change", () => {
     settings.shape = Number(get("preset").value);
+    settings.variation = 0;
     syncControls();
     rememberSettings();
     refreshPreview(true);
   });
   get("random").addEventListener("click", () => {
-    settings.shape = 0;
+    settings.variation = settings.shape === 0 ? 0 : 1;
     settings.seed = (settings.seed + 1 + Math.floor(Math.random() * 999999)) % 1000000;
     syncControls();
     rememberSettings();
     refreshPreview(true);
   });
-  for (const id of ["size", "count", "angle"]) {
+  for (const id of ["size", "complexity", "count", "angle"]) {
     const changed = () => {
       settings[id] = Number(get(id).value);
       if (!settings.count && picker?.name === "line") finishColor(false);

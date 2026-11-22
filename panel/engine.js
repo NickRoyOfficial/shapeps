@@ -4,19 +4,42 @@ const shapes = ["Organic blob", "Circle", "Oval", "Square", "Rectangle",
 const enumeration = (type, value) => ({ _enum: type, _value: value });
 const unit = (name, value) => ({ _unit: name, _value: value });
 const layerRef = id => ({ _ref: "layer", _id: id });
+const turn = 2 * Math.PI;
+const defaultComplexity = 35;
 
-function blobOutline(seed) {
-  const count = 16;
-  const phase = [2, 3, 5].map(n => {
-    const x = Math.sin((seed + n * 137) * 12.9898) * 43758.5453;
-    return 2 * Math.PI * (x - Math.floor(x));
-  });
-  const points = Array.from({ length: count }, (_, i) => {
-    const angle = -Math.PI / 2 + i * 2 * Math.PI / count;
-    const radius = 1 + 0.20 * Math.sin(2 * angle + phase[0])
-      + 0.16 * Math.sin(3 * angle + phase[1]) + 0.025 * Math.sin(5 * angle + phase[2]);
-    return [radius * Math.cos(angle), radius * Math.sin(angle)];
-  });
+function seededUnit(seed, salt) {
+  const value = Math.sin((seed + salt * 137) * 12.9898) * 43758.5453;
+  return value - Math.floor(value);
+}
+
+function radialWave(seed, harmonics) {
+  const waves = harmonics.map(([frequency, amplitude]) => [frequency, amplitude, turn * seededUnit(seed, frequency)]);
+  return angle => waves.reduce((radius, [frequency, amplitude, phase]) =>
+    radius + amplitude * Math.sin(frequency * angle + phase), 1);
+}
+
+function radialOutline(radius, aspect = 1) {
+  const count = 36;
+  return smoothClosedPath(Array.from({ length: count }, (_, i) => {
+    const angle = -Math.PI / 2 + i * turn / count;
+    const distance = radius(angle);
+    return [distance * Math.cos(angle), aspect * distance * Math.sin(angle)];
+  }));
+}
+
+function blobOutline(seed, amount) {
+  const simple = Math.min(amount / 0.35, 1);
+  const detail = Math.max((amount - 0.35) / 0.65, 0);
+  return radialOutline(radialWave(seed, [
+    [2, 0.12 + 0.065 * simple + 0.07 * detail],
+    [3, 0.045 + 0.09 * simple + 0.06 * detail],
+    [5, 0.005 + 0.011 * simple + 0.081 * detail],
+    [4, 0.11 * detail], [6, 0.075 * detail], [7, 0.055 * detail], [9, 0.025 * detail]
+  ]));
+}
+
+function smoothClosedPath(points) {
+  const count = points.length;
   // Convert the closed uniform cubic B-spline to editable Bézier segments.
   // Both the first and second derivatives agree where the segments meet.
   return points.map((point, i) => {
@@ -42,19 +65,50 @@ function ellipseOutline(aspect) {
   });
 }
 
-function outline(shape, seed) {
-  if (shape === 0) return blobOutline(seed);
-  if (shape === 1 || shape === 2) return ellipseOutline(shape === 2 ? 0.63 : 1);
-
+function polygonVertices(shape, seed, amount) {
   const count = [4, 4, 3, 4, 5, 6, 10][shape - 3];
   const start = shape === 3 || shape === 4 ? -Math.PI / 4 : -Math.PI / 2;
   const aspect = shape === 4 ? 0.63 : 1;
   return Array.from({ length: count }, (_, i) => {
-    const angle = start + i * 2 * Math.PI / count;
+    const angle = start + i * turn / count;
     const radius = shape === 9 && i % 2 ? 0.46 : 1;
-    const anchor = [radius * Math.cos(angle), aspect * radius * Math.sin(angle)];
-    return { anchor, incoming: anchor, outgoing: anchor, smooth: false };
+    if (seed === undefined) return [radius * Math.cos(angle), aspect * radius * Math.sin(angle)];
+    const angleJitter = 2 * seededUnit(seed, 20 + 2 * i) - 1;
+    const radiusJitter = 2 * seededUnit(seed, 21 + 2 * i) - 1;
+    const direction = angle + angleJitter * (0.07 + 0.11 * amount) * turn / count;
+    const distance = radius * (1 + radiusJitter * (0.12 + 0.21 * amount));
+    return [distance * Math.cos(direction), aspect * distance * Math.sin(direction)];
   });
+}
+
+function variationOutline(shape, seed, amount) {
+  const wave = radialWave(seed, [
+    [2, 0.025 + 0.075 * amount], [3, 0.016 + 0.065 * amount],
+    [5, 0.11 * amount ** 2], [7, 0.08 * amount ** 2]
+  ]);
+  if (shape < 3) return radialOutline(wave, shape === 2 ? 0.63 : 1);
+
+  const vertices = polygonVertices(shape, seed, amount);
+  const divisions = Math.ceil(36 / vertices.length);
+  const count = divisions * vertices.length;
+  // Scale samples along each edge radially to retain the preset's main corners.
+  const points = vertices.flatMap((vertex, i) => {
+    const next = vertices[(i + 1) % vertices.length];
+    return Array.from({ length: divisions }, (_, j) => {
+      const fraction = j / divisions;
+      const radius = wave((i * divisions + j) * turn / count);
+      return vertex.map((value, axis) => radius * (value + (next[axis] - value) * fraction));
+    });
+  });
+  return smoothClosedPath(points);
+}
+
+function outline(shape, seed, complexity = defaultComplexity, variation = false) {
+  const amount = complexity / 100;
+  if (shape === 0) return blobOutline(seed, amount);
+  if (variation) return variationOutline(shape, seed, amount);
+  if (shape < 3) return ellipseOutline(shape === 2 ? 0.63 : 1);
+  return polygonVertices(shape).map(anchor => ({ anchor, incoming: anchor, outgoing: anchor, smooth: false }));
 }
 
 function fittedOutline(points, width, height, size) {
@@ -69,6 +123,11 @@ function fittedOutline(points, width, height, size) {
     x: (width - (left + right) * scale) / 2,
     y: (height - (top + bottom) * scale) / 2
   };
+}
+
+function shapeGeometry(settings, width, height) {
+  const { shape, seed, size, complexity, variation } = settings;
+  return fittedOutline(outline(shape, seed, complexity, variation), width, height, size);
 }
 
 function positionedPoints(geometry, ratio) {
@@ -209,7 +268,7 @@ async function generate(doc, settings, history) {
       await doc.selection.deselect();
     }
 
-    const geometry = fittedOutline(outline(settings.shape, settings.seed), doc.width, doc.height, settings.size);
+    const geometry = shapeGeometry(settings, doc.width, doc.height);
     const name = shapes[settings.shape];
     let base = await makeShape(doc, name, [subpath(geometry)], fillOptions(settings, geometry, doc));
     const topo = settings.count > 0 ? await makeShape(doc, "Topo lines", bands(geometry, settings.count),
@@ -247,11 +306,12 @@ async function generate(doc, settings, history) {
 }
 
 function sampleOutline(points) {
+  const steps = Math.min(16, Math.ceil(256 / points.length));
   return points.flatMap((point, i) => {
     if (!point.smooth) return [point.anchor];
     const next = points[(i + 1) % points.length];
-    return Array.from({ length: 16 }, (_, step) => {
-      const t = step / 16, s = 1 - t;
+    return Array.from({ length: steps }, (_, step) => {
+      const t = step / steps, s = 1 - t;
       return point.anchor.map((start, axis) =>
         s ** 3 * start + 3 * s ** 2 * t * point.outgoing[axis]
         + 3 * s * t ** 2 * next.incoming[axis] + t ** 3 * next.anchor[axis]
@@ -295,7 +355,7 @@ function previewPixels(doc, settings, width, height) {
   const frameHeight = doc.height * frameScale;
   const left = (width - frameWidth) / 2;
   const top = (height - frameHeight) / 2;
-  const geometry = fittedOutline(outline(settings.shape, settings.seed), frameWidth, frameHeight, settings.size);
+  const geometry = shapeGeometry(settings, frameWidth, frameHeight);
   const samples = sampleOutline(geometry.points);
   // Rasterize the masks at 2× so thin contour bands and curved edges can share a pixel.
   const maskWidth = width * 2, maskHeight = height * 2;
@@ -355,7 +415,7 @@ async function previewImage(doc, settings, viewWidth = previewWidth, viewHeight 
 }
 
 function legacyScene(doc, settings) {
-  const shape = fittedOutline(outline(settings.shape, settings.seed), doc.width, doc.height, settings.size);
+  const shape = shapeGeometry(settings, doc.width, doc.height);
   const name = shapes[settings.shape];
   const layers = [{
     name, fill: fillOptions(settings, shape, doc),

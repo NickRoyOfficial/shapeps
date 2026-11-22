@@ -59,6 +59,7 @@ button:focus, input:focus, select:focus, .color-plane:focus {
   display: flex; align-items: center;
 }
 .control-pair .grow { flex: 1; min-width: 0; margin-right: 6px; }
+.shape-mode { margin-top: 7px; }
 .seed-row { justify-content: space-between; margin-top: 7px; }
 .seed-row input { width: 77px; }
 input[type="text"], select {
