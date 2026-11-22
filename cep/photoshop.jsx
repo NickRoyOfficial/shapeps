@@ -63,6 +63,8 @@ function ShapePS_descriptor(object) {
 }
 
 function ShapePS_path(doc, name, definitions) {
+    // ExtendScript path coordinates use a 72 ppi reference, even with pixel rulers.
+    var scale = 72 / doc.resolution;
     var subpaths = [];
     for (var i = 0; i < definitions.length; i++) {
         var definition = definitions[i];
@@ -74,49 +76,55 @@ function ShapePS_path(doc, name, definitions) {
             var source = definition.points[j];
             var point = new PathPointInfo();
             point.kind = source.smooth ? PointKind.SMOOTHPOINT : PointKind.CORNERPOINT;
-            point.anchor = source.anchor;
-            point.leftDirection = source.outgoing;
-            point.rightDirection = source.incoming;
+            point.anchor = [source.anchor[0] * scale, source.anchor[1] * scale];
+            point.leftDirection = [source.outgoing[0] * scale, source.outgoing[1] * scale];
+            point.rightDirection = [source.incoming[0] * scale, source.incoming[1] * scale];
             points.push(point);
         }
         subpath.entireSubPath = points;
         subpaths.push(subpath);
     }
-    doc.pathItems.add(name, subpaths);
+    return doc.pathItems.add(name, subpaths);
 }
 
-function ShapePS_makeShape(doc, definition) {
-    var make = new ActionDescriptor();
-    var target = new ActionReference();
-    target.putClass(ShapePS_id("contentLayer"));
-    make.putReference(ShapePS_id("null"), target);
-    var fill = ShapePS_descriptor({ type: definition.fill });
-    make.putObject(ShapePS_id("using"), ShapePS_id("contentLayer"), fill);
-    var previousId = doc.activeLayer.id;
-    executeAction(ShapePS_id("make"), make, DialogModes.NO);
-    var layer = doc.activeLayer;
-    if (layer.id === previousId) throw new Error("Photoshop did not create a fill layer.");
+function ShapePS_hasCanvasContent(doc, layer) {
+    var bounds = layer.bounds;
+    var left = ShapePS_pixels(bounds[0], doc.resolution);
+    var top = ShapePS_pixels(bounds[1], doc.resolution);
+    var right = ShapePS_pixels(bounds[2], doc.resolution);
+    var bottom = ShapePS_pixels(bounds[3], doc.resolution);
+    var width = ShapePS_pixels(doc.width, doc.resolution);
+    var height = ShapePS_pixels(doc.height, doc.resolution);
+    return Math.min(right, width) > Math.max(left, 0) && Math.min(bottom, height) > Math.max(top, 0);
+}
 
+function ShapePS_layerInfo(layer) {
     var item = new ActionReference();
     item.putIdentifier(ShapePS_id("layer"), layer.id);
+    return executeActionGet(item);
+}
+
+function ShapePS_hasVectorMask(layerInfo) {
     var hasMask = ShapePS_id("hasVectorMask");
-    var layerInfo = executeActionGet(item);
+    return layerInfo.hasKey(hasMask) && layerInfo.getBoolean(hasMask);
+}
+
+function ShapePS_hasShape(doc, layer, layerInfo) {
+    var empty = ShapePS_id("vectorMaskEmpty");
+    return ShapePS_hasVectorMask(layerInfo) && (!layerInfo.hasKey(empty) || !layerInfo.getBoolean(empty)) &&
+        ShapePS_hasCanvasContent(doc, layer);
+}
+
+function ShapePS_applyVectorMask(path, replaceMask) {
     var mask = new ActionReference();
     mask.putEnumerated(ShapePS_id("path"), ShapePS_id("path"), ShapePS_id("vectorMask"));
-    if (layerInfo.hasKey(hasMask) && layerInfo.getBoolean(hasMask)) {
+    if (replaceMask) {
         var removeMask = new ActionDescriptor();
         removeMask.putReference(ShapePS_id("null"), mask);
         executeAction(ShapePS_id("delete"), removeMask, DialogModes.NO);
     }
 
-    var pathName = "ShapePS temporary " + layer.id + "-" + new Date().getTime();
-    ShapePS_path(doc, pathName, definition.paths);
-    var named = new ActionReference();
-    named.putName(ShapePS_id("path"), pathName);
-    var select = new ActionDescriptor();
-    select.putReference(ShapePS_id("null"), named);
-    executeAction(ShapePS_id("select"), select, DialogModes.NO);
-
+    path.select();
     var createMask = new ActionDescriptor();
     var pathClass = new ActionReference();
     pathClass.putClass(ShapePS_id("path"));
@@ -126,7 +134,32 @@ function ShapePS_makeShape(doc, definition) {
     currentPath.putEnumerated(ShapePS_id("path"), ShapePS_id("ordinal"), ShapePS_id("targetEnum"));
     createMask.putReference(ShapePS_id("using"), currentPath);
     executeAction(ShapePS_id("make"), createMask, DialogModes.NO);
-    executeAction(ShapePS_id("delete"), select, DialogModes.NO);
+}
+
+function ShapePS_makeShape(doc, definition) {
+    var previousId = doc.activeLayer.id;
+    var pathName = "ShapePS temporary " + previousId + "-" + new Date().getTime();
+    var path = ShapePS_path(doc, pathName, definition.paths);
+    // New Fill Layer copies the selected path into the layer's vector mask.
+    path.select();
+    var make = new ActionDescriptor();
+    var target = new ActionReference();
+    target.putClass(ShapePS_id("contentLayer"));
+    make.putReference(ShapePS_id("null"), target);
+    var fill = ShapePS_descriptor({ type: definition.fill });
+    make.putObject(ShapePS_id("using"), ShapePS_id("contentLayer"), fill);
+    executeAction(ShapePS_id("make"), make, DialogModes.NO);
+    var layer = doc.activeLayer;
+    if (layer.id === previousId) throw new Error("Photoshop did not create a fill layer.");
+
+    var layerInfo = ShapePS_layerInfo(layer);
+    if (!ShapePS_hasShape(doc, layer, layerInfo)) {
+        ShapePS_applyVectorMask(path, ShapePS_hasVectorMask(layerInfo));
+    }
+    path.remove();
+    if (!ShapePS_hasShape(doc, layer, ShapePS_layerInfo(layer))) {
+        throw new Error("Photoshop created an empty layer for " + definition.name + ".");
+    }
     layer.name = definition.name;
     return layer;
 }
@@ -155,6 +188,7 @@ function ShapePS_apply() {
             doc.activeLayer = topo;
             base = topo.merge();
         }
+        if (!ShapePS_hasCanvasContent(doc, base)) throw new Error("Photoshop created an empty raster layer.");
         base.name = plan.name + " - Raster";
         doc.activeLayer = base;
     } else if (topo) {
@@ -170,6 +204,7 @@ function ShapePS_apply() {
         doc.selection.load(channel, SelectionType.REPLACE);
         channel.remove();
     }
+    ShapePS_pending = null;
 }
 
 function ShapePS_generate(plan) {
@@ -184,6 +219,7 @@ function ShapePS_generate(plan) {
         try {
             if (rulerUnits != Units.PIXELS) app.preferences.rulerUnits = Units.PIXELS;
             doc.suspendHistory("Generate ShapePS shape", "ShapePS_apply()");
+            if (ShapePS_pending) throw new Error("Photoshop did not finish generating the shape.");
         } catch (error) {
             doc.activeHistoryState = previous;
             throw error;
